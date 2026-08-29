@@ -2,9 +2,9 @@
 // Claude conversation console.
 //
 // Unlike the read-only viewer this grew out of, this server can execute `claude`
-// under the user's account. That is why every non-loopback bind needs a shared
-// token, why the message a run sends only ever travels over stdin, and why every
-// other argument is an allowlisted token. See README.md § Exposure.
+// under the user's account. That is why access is gated on a code from an
+// authenticator app, why the message a run sends only ever travels over stdin,
+// and why every other argument is an allowlisted token. See README.md § Exposure.
 //
 // node: built-ins only. No third-party dependency, no package.json.
 
@@ -12,7 +12,6 @@ import http from 'node:http';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig, saveConfig, configPath, encodeProjectId, resolveProjectId, validateProjectPath, MODELS, EFFORTS, PERMISSION_MODES } from './lib/config.mjs';
@@ -23,10 +22,12 @@ import { createRunRegistry } from './lib/claude-run.mjs';
 import { resolveJob } from './lib/resolve-job.mjs';
 import { openTerminal } from './lib/terminal.mjs';
 import { renderMarkdown } from './lib/markdown.mjs';
+import { loadEnrollment, createSessionStore, enrollmentPath } from './lib/authstore.mjs';
+import { verifyTotp, STEP_SECONDS } from './lib/totp.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const DEFAULT_PORT = 8731;
+const DEFAULT_PORT = 5081;
 const DEFAULT_HOST = '127.0.0.1';
 const MAX_BODY_BYTES = 256 * 1024;
 
@@ -41,8 +42,7 @@ function isValidHost(host) {
 export function parseArgs(argv) {
   let port = DEFAULT_PORT;
   let host = DEFAULT_HOST;
-  let token = null;
-  let noToken = false;
+  let noOtp = false;
   let open = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -51,8 +51,7 @@ export function parseArgs(argv) {
 
     if (arg === '--port' || arg.startsWith('--port=')) port = Number(valueOf('--port'));
     else if (arg === '--host' || arg.startsWith('--host=')) host = valueOf('--host');
-    else if (arg === '--token' || arg.startsWith('--token=')) token = valueOf('--token');
-    else if (arg === '--no-token') noToken = true;
+    else if (arg === '--no-otp') noOtp = true;
     else if (arg === '--lan') host = '0.0.0.0';
     else if (arg === '--open') open = true;
     else throw new Error(`Unknown argument: ${arg}`);
@@ -64,17 +63,14 @@ export function parseArgs(argv) {
   if (!isValidHost(host)) {
     throw new Error(`Invalid --host value: ${JSON.stringify(host)}. Expected an IPv4/IPv6 address, "localhost", or --lan for 0.0.0.0.`);
   }
-  if (token !== null && (typeof token !== 'string' || token.trim().length < 8)) {
-    throw new Error('Invalid --token value: it must be at least 8 characters.');
-  }
-  if (noToken && !isLoopback(host)) {
+  if (noOtp && !isLoopback(host)) {
     throw new Error(
-      `--no-token cannot be combined with --host ${host}. This server can run \`claude\` as you; a non-loopback bind requires a token. ` +
-      'Drop --no-token (one is generated and printed for you) or pass --token <secret>.',
+      `--no-otp cannot be combined with --host ${host}. This server can run \`claude\` as you; a non-loopback bind is always gated. ` +
+      'Drop --no-otp, or bind loopback only.',
     );
   }
 
-  return { port, host, token, noToken, open };
+  return { port, host, noOtp, open };
 }
 
 // ── Small response helpers ───────────────────────────────────────────────────
@@ -123,13 +119,50 @@ async function readJsonBody(req) {
   return JSON.parse(raw);
 }
 
-/** Constant-time compare so a wrong token cannot be guessed a character at a time. */
-function tokenMatches(expected, given) {
-  if (typeof given !== 'string') return false;
-  const a = Buffer.from(expected);
-  const b = Buffer.from(given);
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+// ── One-time codes ───────────────────────────────────────────────────────────
+
+const OTP_MAX_FAILURES = 5;
+const OTP_LOCKOUT_MS = 60 * 1000;
+
+/**
+ * Guards the code exchange.
+ *
+ * A six digit code with a one step window either side means three of a million
+ * codes are live at any moment. Unthrottled, that is roughly a day of flat-out
+ * guessing on a LAN. Five wrong codes buy a minute of silence, which pushes the
+ * same attempt count past a century.
+ *
+ * `used` is the replay guard: a code stays valid for its whole window, so a
+ * counter that has already been spent is refused even when the arithmetic says
+ * the digits are right.
+ */
+function createOtpGuard({ maxFailures = OTP_MAX_FAILURES, lockoutMs = OTP_LOCKOUT_MS } = {}) {
+  let failures = 0;
+  let lockedUntil = 0;
+  const used = new Set();
+
+  return {
+    lockedFor(now = Date.now()) {
+      return lockedUntil > now ? Math.ceil((lockedUntil - now) / 1000) : 0;
+    },
+    fail(now = Date.now()) {
+      failures++;
+      if (failures >= maxFailures) {
+        lockedUntil = now + lockoutMs;
+        failures = 0;
+      }
+    },
+    /** False when this counter was already spent. Records it when it is not. */
+    claim(counter, now = Date.now()) {
+      if (used.has(counter)) return false;
+      used.add(counter);
+      // Anything older than the accept window can never be claimed again.
+      const floor = Math.floor(now / 1000 / STEP_SECONDS) - 2;
+      for (const c of used) if (c < floor) used.delete(c);
+      failures = 0;
+      return true;
+    },
+  };
 }
 
 // ── Path safety ──────────────────────────────────────────────────────────────
@@ -189,9 +222,21 @@ function handleMarkdownRoute(res, projectPath, rawFolder, rawFile) {
 
 // ── Server ───────────────────────────────────────────────────────────────────
 
-export function createServer({ token = null, home = undefined, runs = createRunRegistry(), usage = createUsageCache() } = {}) {
+/**
+ * `otpSecret` is the enrolled base32 secret, or null for an ungated server.
+ * When it is set, every `/api/*` route except `/api/auth/*` needs a session
+ * token that `POST /api/auth/otp` handed out in exchange for a live code.
+ */
+export function createServer({
+  otpSecret = null,
+  home = undefined,
+  runs = createRunRegistry(),
+  usage = createUsageCache(),
+  sessions = createSessionStore(),
+} = {}) {
   const clientHtmlPath = path.join(__dirname, 'client.html');
   const homeArgs = home === undefined ? [] : [home];
+  const otpGuard = createOtpGuard();
 
   let config = loadConfig(...homeArgs);
   usage.setIntervalMinutes(config.usageIntervalMinutes);
@@ -288,6 +333,43 @@ export function createServer({ token = null, home = undefined, runs = createRunR
     sendJson(res, 200, { ...config, configPath: configPath(...homeArgs) });
   }
 
+  /**
+   * Trades a six digit code for a session token.
+   *
+   * Ungated on purpose - it is the way in - which is why the throttle and the
+   * replay guard live here rather than anywhere else.
+   */
+  async function handleOtpExchange(req, res) {
+    const locked = otpGuard.lockedFor();
+    if (locked > 0) {
+      sendJson(res, 429, { error: `Too many wrong codes. Try again in ${locked}s.`, retryAfterSeconds: locked });
+      return;
+    }
+
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (err) {
+      sendJson(res, err.tooLarge ? 413 : 400, { error: err.tooLarge ? err.message : `Invalid request body: ${err.message}` });
+      return;
+    }
+
+    const result = verifyTotp(otpSecret, body?.code);
+    if (!result.ok) {
+      otpGuard.fail();
+      sendJson(res, 401, { error: 'That code is not right. Check the one your authenticator is showing now.' });
+      return;
+    }
+    if (!otpGuard.claim(result.counter)) {
+      otpGuard.fail();
+      sendJson(res, 401, { error: 'That code has already been used. Wait for the next one.' });
+      return;
+    }
+
+    const session = sessions.issue();
+    sendJson(res, 200, { token: session.token, expiresAt: session.expiresAt });
+  }
+
   async function handleRunStart(req, res, projectPath, projectId, sessionId) {
     let body;
     try {
@@ -324,10 +406,33 @@ export function createServer({ token = null, home = undefined, runs = createRunR
     }
     const pathname = url.pathname;
 
-    // The page itself is always served so the token can be entered in the UI;
-    // every /api/* route is gated.
-    if (token && pathname.startsWith('/api/') && !tokenMatches(token, req.headers['x-hub-token'])) {
-      sendJson(res, 401, { error: 'Missing or invalid X-Hub-Token header.' });
+    // Whether a code is needed at all. The page reads this before it renders,
+    // so an ungated loopback server never shows the prompt.
+    if (pathname === '/api/auth/status' && req.method === 'GET') {
+      sendJson(res, 200, {
+        required: Boolean(otpSecret),
+        authenticated: !otpSecret || sessions.validate(req.headers['x-hub-token']),
+        digits: 6,
+        periodSeconds: STEP_SECONDS,
+      });
+      return;
+    }
+
+    if (pathname === '/api/auth/otp') {
+      if (!otpSecret) { sendJson(res, 404, { error: 'This server is not gated; no code is needed.' }); return; }
+      if (req.method !== 'POST') { sendJson(res, 405, { error: 'Only POST is supported here' }); return; }
+      handleOtpExchange(req, res);
+      return;
+    }
+
+    // The page itself is always served so the code can be entered in the UI;
+    // every other /api/* route needs the session token that code bought.
+    //
+    // Requiring a header, rather than reading a cookie, is also what stops a
+    // random page in another tab from POSTing to this server: a custom header
+    // forces a CORS preflight, and nothing here answers one.
+    if (otpSecret && pathname.startsWith('/api/') && !sessions.validate(req.headers['x-hub-token'])) {
+      sendJson(res, 401, { error: 'Missing or expired session. Enter the 6 digit code from your authenticator.' });
       return;
     }
 
@@ -341,7 +446,11 @@ export function createServer({ token = null, home = undefined, runs = createRunR
 
     if (pathname === '/api/config') {
       if (req.method === 'GET') {
-        sendJson(res, 200, { ...config, configPath: configPath(...homeArgs), models: MODELS, efforts: EFFORTS, permissionModes: PERMISSION_MODES });
+        // A config pinned to an exact version holds a model MODELS does not offer.
+        // Leaving it out would render a select with nothing selected, so the page
+        // would show `opus` while the server still ran the pinned one.
+        const models = MODELS.includes(config.defaults.model) ? MODELS : [config.defaults.model, ...MODELS];
+        sendJson(res, 200, { ...config, configPath: configPath(...homeArgs), models, efforts: EFFORTS, permissionModes: PERMISSION_MODES });
         return;
       }
       if (req.method === 'PUT') { handleConfigPut(req, res); return; }
@@ -472,14 +581,32 @@ function main() {
     process.exit(1);
   }
 
-  const { port, host, open } = opts;
+  const { port, host, open, noOtp } = opts;
   const exposed = !isLoopback(host); // 0.0.0.0 included - it binds every interface
-  // A token is mandatory the moment the server is reachable from off-machine.
-  // On loopback it is opt-in, because a token there only protects against other
-  // local users - who can run `claude` themselves anyway.
-  const token = opts.token ?? (exposed ? crypto.randomBytes(24).toString('base64url') : null);
 
-  const server = createServer({ token });
+  let enrollment;
+  try {
+    enrollment = loadEnrollment();
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
+
+  // Off-machine and unpaired is refused outright. There is no fallback secret
+  // to fall back to any more, and starting wide open is not a default anyone
+  // should get by forgetting a step.
+  if (exposed && !enrollment) {
+    console.error(`Cannot bind ${host}: no authenticator is paired with this machine, so there would be nothing gating it.`);
+    console.error('Pair one first:  node src/enroll.mjs');
+    console.error(`It writes ${enrollmentPath()}.`);
+    process.exit(1);
+  }
+
+  // Once paired, loopback is gated too. A code every 12 hours is the price of
+  // any page in any tab not being able to POST a run into this server.
+  const otpSecret = enrollment && !noOtp ? enrollment.secret : null;
+
+  const server = createServer({ otpSecret });
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
@@ -503,16 +630,22 @@ function main() {
     console.log(`Bound to:    ${host}:${port}`);
     console.log(`Config file: ${configPath()}`);
 
-    if (token) {
+    if (otpSecret) {
       console.log('');
-      console.log(`Access token: ${token}`);
-      console.log('Paste it into the page when asked. Every /api/* request needs it as the X-Hub-Token header.');
+      console.log(`Sign in: the page asks for the 6 digit code your authenticator shows for ${enrollment.account}.`);
+      console.log('A correct code buys a 12 hour session. Restarting this server ends every session.');
+    } else if (enrollment) {
+      console.log('');
+      console.warn('--no-otp: every /api/* route is open to anything that can reach 127.0.0.1, this browser included.');
+    } else {
+      console.log('');
+      console.log('No authenticator paired, so nothing is gated. Pair one with: node src/enroll.mjs');
     }
 
     if (exposed) {
       console.warn('');
       console.warn(`WARNING: bound to ${host}, not loopback. This server can run \`claude\` under your account, with your`);
-      console.warn('files and your subscription. The token above is the only thing standing between the network and that.');
+      console.warn(`files and your subscription. A code from ${enrollment.account} is the only thing standing between the network and that.`);
       console.warn('');
     }
 

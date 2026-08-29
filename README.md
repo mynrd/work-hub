@@ -16,19 +16,25 @@ Node built-ins only. No `package.json`, no `npm install`, no dependencies.
 ## Run it
 
 ```powershell
+.\run.ps1 -Enroll               # once: pair your authenticator app
 .\run.ps1                       # every interface, and restarts when main moves
 .\run.ps1 -OpenBrowser          # same, and open the browser once it answers
 .\run.ps1 -Loopback -NoWatch    # 127.0.0.1 only, no git polling
 ```
+
+`-Enroll` is a one-off. It prints a QR code in the console, you scan it with Authy (or
+Google Authenticator, or 1Password - anything doing standard TOTP), and you type back the
+6 digit code it starts showing. Only then is the shared secret written, to
+`~/.work-hub/totp.json`. From then on the page asks for a code instead of a pasted token.
 
 The default bind is `0.0.0.0`, so the LAN address, the Tailscale `100.x` address and the
 NordVPN Meshnet address all answer on the same port. Every one of them is printed on start:
 
 ```
 Reachable at:
-  http://127.0.0.1:8731/
-  http://192.168.1.42:8731/
-  http://100.97.229.12:8731/
+  http://127.0.0.1:5081/
+  http://192.168.1.42:5081/
+  http://100.97.229.12:5081/
 ```
 
 Narrow it with `-Loopback`, `-Tailscale`, or `-BindAddress <ip>`.
@@ -42,11 +48,16 @@ does not become a restart loop.
 or directly:
 
 ```powershell
-node src/serve.mjs                        # 127.0.0.1:8731
+node src/serve.mjs                        # 127.0.0.1:5081
 node src/serve.mjs --port 9000            # a different port
-node src/serve.mjs --host 192.168.1.20    # a specific interface (token required)
-node src/serve.mjs --lan                  # every interface  (token required)
-node src/serve.mjs --token my-secret-here # supply the token instead of generating one
+node src/serve.mjs --host 192.168.1.20    # a specific interface (pairing required)
+node src/serve.mjs --lan                  # every interface  (pairing required)
+node src/serve.mjs --no-otp               # loopback only: no code prompt at all
+
+node src/enroll.mjs                       # pair an authenticator
+node src/enroll.mjs --status              # who is paired, and when
+node src/enroll.mjs --force               # replace the pairing (the old one stops working)
+node src/enroll.mjs --reset               # unpair; nobody can sign in until you enroll again
 ```
 
 On start it prints the bound address and the config file path. A port already in use, or an address this machine does not own, fails with a one-line message naming the flag to change, and exits 1.
@@ -68,12 +79,24 @@ That is checked, not assumed: in `-p` mode with the default permission mode, a `
 
 So:
 
-- `serve.mjs` on its own still defaults to **loopback only**. `run.ps1` defaults to `0.0.0.0`, which is why it always demands a token and prints the warning below; `-Loopback` puts it back.
-- Any **non-loopback bind requires a token**. `serve.mjs` generates one and prints it, or you pass `--token <secret>`. Every `/api/*` request must carry it as the `X-Hub-Token` header; the page asks for it once and keeps it in `localStorage`. `GET /` is always served so the token can be entered.
-- `--no-token` exists for loopback only. Combining it with a non-loopback host refuses to start.
+- `serve.mjs` on its own still defaults to **loopback only**. `run.ps1` defaults to `0.0.0.0`, which is why it refuses to start without a pairing and prints the warning below; `-Loopback` puts it back.
+- Any **non-loopback bind requires a paired authenticator**. There is no generated fallback secret any more: an unpaired machine will not bind anything but loopback, and says so with the command to fix it.
+- **Once paired, loopback is gated too.** That is not about other users on the machine - it is about the browser. With no header required, any page open in any tab can `fetch('http://127.0.0.1:5081/api/projects/<id>/sessions', {method:'POST', mode:'no-cors', ...})` and start a `claude` run under your account; it never sees the response, but the run happens, and DNS rebinding does the same thing from a random site. Requiring `X-Hub-Token` forces a CORS preflight, and nothing here answers one.
+- `--no-otp` turns the gate off, and only on a loopback bind. Combining it with a non-loopback host refuses to start.
 - Binding beyond loopback also needs a Windows Firewall inbound-allow rule. `run.ps1` checks for one and prints the exact `New-NetFirewallRule` command; it never creates one, because that needs elevation.
 
-Anyone who reaches the port and holds the token can read every file under your `.work/` folders, read every Claude Code transcript for the monitored projects, start new Claude runs, and **open a terminal window on the machine running the server** - the Terminal button is a `POST` that spawns `cmd /c start`, so a console appears on your desktop running `claude remote-control --spawn same-dir`, which then accepts work from claude.ai and the mobile app. Treat the token like an SSH key.
+### How signing in works
+
+1. `GET /` is always served, so the prompt can be shown.
+2. The page posts the 6 digit code to `POST /api/auth/otp`. That route is the way in, so it is the only ungated one.
+3. A correct code comes back as a **session token**: 32 random bytes, good for 12 hours, held in `localStorage`. Every other `/api/*` request carries it as `X-Hub-Token`.
+4. Sessions live in memory only, so restarting the server signs every browser out. A 401 re-opens the prompt and replays the request that failed.
+
+A code is single use - the counter it verified against is remembered and refused a second time, so a code read over your shoulder is already spent. Five wrong codes lock the exchange for 60 seconds, which is what keeps a six digit secret from being guessable: three of a million codes are live at any moment, and unthrottled that is about a day of flat-out guessing on a LAN.
+
+The secret lives in `~/.work-hub/totp.json`, **not** in a `.env` in this repo - this repo gets committed, and a secret that can start `claude` under your account should not be one `git add -A` from being pushed. `enroll.mjs` writes it 0600 and never opens a socket: the QR is drawn in the terminal by [qr.mjs](src/lib/qr.mjs) precisely so the secret is never handed to a QR service.
+
+Anyone who reaches the port and can produce a code can read every file under your `.work/` folders, read every Claude Code transcript for the monitored projects, start new Claude runs, and **open a terminal window on the machine running the server** - the Terminal button is a `POST` that spawns `cmd /c start`, so a console appears on your desktop running `claude remote-control --spawn same-dir`, which then accepts work from claude.ai and the mobile app. Treat the phone holding that pairing like an SSH key.
 
 The message you type is never an argument. On Windows `claude` resolves to `claude.cmd`, which Node will only spawn with `shell: true`, and with `shell: true` Node does not escape argv. So every argument is an allowlisted token or a UUID matched against a regex, and the message itself goes over the child's stdin.
 
@@ -90,9 +113,17 @@ Stored in `~/.work-hub/config.json`, written atomically (temp file + rename), 2-
     "D:\\Work\\git\\mynrd\\work-hub"
   ],
   "usageIntervalMinutes": 5,
-  "defaults": { "model": "claude-fable-5", "effort": "medium", "permissionMode": "default" }
+  "defaults": { "model": "opus", "effort": "high", "permissionMode": "default" }
 }
 ```
+
+The Model select offers aliases - `opus`, `opus[1m]`, `sonnet`, `haiku`, `fable` - which
+`claude --model` resolves to that family's newest version when it spawns, so the list does
+not go stale on a Claude Code update. The tradeoff is that a new version starts running
+here on its own, and you only see which one ran once the transcript names it. To pin a
+version, put an exact id (`claude-opus-5`, `claude-opus-5[1m]`) in `config.json` by hand:
+`ALLOWED_MODELS` in `src/lib/config.mjs` accepts it, and the Settings select adds it as an
+option so the page shows what is actually running.
 
 Edit it from the **Settings** page. Adding a path that does not exist is refused with the reason. A folder with no `.work/` is fine - it is listed with `0 jobs` and its conversations still work.
 
@@ -110,7 +141,11 @@ A hand-mangled config never stops the server: unknown or wrongly-typed fields fa
 run.ps1                  PowerShell wrapper: bind selection, firewall check, exposure warning,
                          and the watch loop that restarts the server when main moves
 
-src/serve.mjs            HTTP server, arg parsing, routes, token check
+src/serve.mjs            HTTP server, arg parsing, routes, the code/session gate
+src/enroll.mjs           terminal app: prints the QR, confirms a code, writes the secret
+src/lib/totp.mjs         RFC 4226/6238 TOTP, base32, the otpauth:// URI
+src/lib/qr.mjs           QR encoder (byte mode, level M, versions 1-10) and the terminal render
+src/lib/authstore.mjs    ~/.work-hub/totp.json, and the in-memory session tokens
 src/client.html          the whole UI - markup, CSS and JS inline, no build step
 
 src/lib/config.mjs       ~/.work-hub/config.json, path validation, the model/effort/permission allowlists
@@ -220,7 +255,9 @@ Work Hub launches it and forgets it: no run is registered, no output is captured
 
 | Method | Route | Returns |
 |---|---|---|
-| GET | `/` | `client.html` |
+| GET | `/` | `client.html` - always served, gate or no gate, so the code can be typed |
+| GET | `/api/auth/status` | `{ required, authenticated, digits, periodSeconds }` - ungated |
+| POST | `/api/auth/otp` | `{ token, expiresAt }` for a live 6 digit code; 401 wrong or replayed, 429 locked out. Ungated - it is the way in |
 | GET / PUT | `/api/config` | the config; PUT validates every path with `statSync().isDirectory()` |
 | GET | `/api/dashboard` | `{ projects[] }` - id, path, name, `missing`, `hasWorkDir`. Two `statSync` calls per folder, nothing else |
 | GET | `/api/projects/:pid/jobs` | `{ today[], notStarted[], others[], unreadable[] }` for that one folder - the `.work` scan, on demand, no cache |
@@ -239,7 +276,7 @@ Work Hub launches it and forgets it: no run is registered, no output is captured
 
 Only `PUT /api/config`, the two POST run routes, `/api/usage/refresh`, `/api/projects/:pid/terminal` and `/api/projects/:pid/jobs/:folder/resolve` change anything. Everything else is read-only.
 
-`resolve` is the single route that writes into a monitored folder - see below. Otherwise the only files Work Hub writes are `~/.work-hub/config.json` and whatever `claude` itself writes.
+`resolve` is the single route that writes into a monitored folder - see below. Otherwise the only files Work Hub writes are `~/.work-hub/config.json`, `~/.work-hub/totp.json` (by `enroll.mjs`, never by the server), and whatever `claude` itself writes.
 
 ---
 
@@ -251,7 +288,7 @@ node --test test/*.test.mjs
 
 The glob form matters: `node --test .` fails on Node v26 with `Cannot find module`.
 
-122 tests cover grouping and the unknown-shape tolerance, the AC-count rule, the transcript folder encoding and session summaries, the chat parser's never-drop rule (including a fixture record type that does not exist), the argument builder and the run registry, config load/save/validation, the token gate, path safety, the split between the light dashboard and the on-demand job scan, the terminal launcher's argument list, and the `/usage` parser. Nothing in the suite starts a real `claude`, and no test opens a terminal window - every spawn is faked.
+158 tests cover grouping and the unknown-shape tolerance, the AC-count rule, the transcript folder encoding and session summaries, the chat parser's never-drop rule (including a fixture record type that does not exist), the argument builder and the run registry, config load/save/validation, the code exchange (against the RFC 4226 and RFC 6238 published vectors) with its replay guard and lockout, the QR encoder (its codewords, error correction included, checked against vectors captured from an independent implementation, plus a round trip through a decoder written from the spec geometry rather than from the encoder), session issue and expiry, path safety, the split between the light dashboard and the on-demand job scan, the terminal launcher's argument list, and the `/usage` parser. Nothing in the suite starts a real `claude`, and no test opens a terminal window - every spawn is faked.
 
 `client.html` has no test runner pointed at it; it is checked by hand in a browser.
 
@@ -264,7 +301,7 @@ The glob form matters: `node --test .` fails on Node v26 with `Cannot find modul
 - Streaming a reply token by token. The page polls the `.jsonl` instead.
 - Answering permission prompts interactively.
 - Editing `PLAN.md`, or anything under a monitored folder other than the workflow block that **Resolve** rewrites.
-- Multi-user, auth beyond the shared token, HTTPS.
+- Multi-user, accounts, roles, HTTPS. One pairing, one person.
 
 ## Credits
 

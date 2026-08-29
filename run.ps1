@@ -13,8 +13,8 @@
     The default is 0.0.0.0 - every interface this machine has, all at once, so
     the LAN address, the Tailscale 100.x address and the NordVPN Meshnet address
     all answer on the same port. Every one of them is printed on start. Any
-    non-loopback bind requires a shared token; one is generated if you do not
-    pass -Token.
+    non-loopback bind requires an authenticator app paired with this machine;
+    pair one with -Enroll before binding anything but loopback.
 
     Exposure options, in order of precedence when more than one is passed:
       1. -BindAddress <ip>   bind exactly that address and nothing else
@@ -27,6 +27,18 @@
     Binding beyond loopback also needs a Windows Firewall inbound-allow rule for
     the port. This script only checks for one and prints the exact command to
     create it - creating one needs an elevated shell this script does not assume.
+
+    SIGN IN
+    Access is gated on a 6 digit code from an authenticator app (Authy, Google
+    Authenticator, 1Password - anything that does standard TOTP). Run
+    `.\run.ps1 -Enroll` once: it prints a QR code in this console, you scan it,
+    you type back the code it starts showing, and the shared secret is written
+    to $env:USERPROFILE\.work-hub\totp.json. Nothing about that leaves the
+    machine, and the secret is never stored in this repo.
+
+    From then on the page asks for a code instead of a pasted token. A correct
+    code buys a 12 hour session in that browser; restarting the server ends
+    every session.
 
     WATCH
     While the server runs, this script polls this repository every
@@ -44,7 +56,8 @@
     commit does not turn into a restart loop.
 
 .PARAMETER Port
-    TCP port to listen on. Default 8731 (same default as serve.mjs).
+    TCP port to listen on. Default 5081 (same default as serve.mjs). Whatever is
+    already listening on it is killed before node starts.
 
 .PARAMETER Lan
     Bind 0.0.0.0 - every interface on this machine. This is now the default;
@@ -61,11 +74,16 @@
 .PARAMETER BindAddress
     Bind exactly this address, and no other interface.
 
-.PARAMETER Token
-    The shared secret every /api/* request must send as X-Hub-Token. Omit on a
-    non-loopback bind and one is generated for you. In watch mode the token is
-    generated HERE rather than by serve.mjs, so a restart does not rotate it and
-    log out every open browser tab.
+.PARAMETER Enroll
+    Pair an authenticator app with this machine and exit. Prints a QR code in
+    this console and waits for the 6 digit code it produces. Run it once, before
+    the first non-loopback bind. Re-running it warns before replacing a pairing
+    that already works.
+
+.PARAMETER NoOtp
+    Skip the code prompt entirely. Only accepted on a loopback bind, and it
+    leaves every /api/* route open to anything that can reach 127.0.0.1 -
+    including any page open in any browser tab on this machine.
 
 .PARAMETER NoWatch
     Do not poll git. Run the server once, in the foreground, and stop there.
@@ -77,8 +95,12 @@
     Once the server answers, launch the default browser there.
 
 .EXAMPLE
+    .\run.ps1 -Enroll
+    Pair your authenticator. Do this first; it is a one-off.
+
+.EXAMPLE
     .\run.ps1
-    Every interface - LAN, Tailscale, Meshnet - behind a generated token, and
+    Every interface - LAN, Tailscale, Meshnet - behind a 6 digit code, and
     restarting itself whenever main moves.
 
 .EXAMPLE
@@ -91,12 +113,13 @@
 #>
 [CmdletBinding()]
 param(
-    [int]$Port = 8731,
+    [int]$Port = 5081,
     [switch]$Lan,
     [switch]$Loopback,
     [switch]$Tailscale,
     [string]$BindAddress,
-    [string]$Token,
+    [switch]$Enroll,
+    [switch]$NoOtp,
     [switch]$NoWatch,
     [int]$WatchInterval = 60,
     [switch]$OpenBrowser
@@ -111,6 +134,30 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 
 $repoRoot = $PSScriptRoot
+
+# --- Enrollment: pair an authenticator, then stop ---------------------------
+# Handled before anything else so it works on a machine with no git, no
+# firewall rule and nothing bound.
+if ($Enroll) {
+    $nodeForEnroll = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $nodeForEnroll) {
+        Write-Error 'Node.js was not found on PATH. Install Node 18+ and retry.'
+        exit 1
+    }
+    # The QR is drawn with half-block characters; a console left on the legacy
+    # code page renders them as mojibake and no phone reads it.
+    $previousEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        # No pass-through here: [CmdletBinding()] binds the declared parameters
+        # and refuses everything else, so $args is always empty. --force,
+        # --reset and --status are run directly: node src\enroll.mjs --force
+        & $nodeForEnroll.Source (Join-Path $PSScriptRoot 'src\enroll.mjs')
+        exit $LASTEXITCODE
+    } finally {
+        [Console]::OutputEncoding = $previousEncoding
+    }
+}
 
 # --- Node present? ---------------------------------------------------------
 $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
@@ -212,7 +259,7 @@ if ($isExposed) {
 
     Write-Host ''
     Write-Host 'WARNING: Work Hub can run `claude` under YOUR account.' -ForegroundColor Red
-    Write-Host 'Anyone who reaches the address below and holds the token can read your .work/ folders, read every Claude Code' -ForegroundColor Red
+    Write-Host 'Anyone who reaches the address below and can produce a code can read your .work/ folders, read every Claude Code' -ForegroundColor Red
     Write-Host 'transcript for the monitored projects, and start new Claude runs that edit files and spend your subscription.' -ForegroundColor Red
     if ($bindHost -eq '0.0.0.0') {
         Write-Host 'This bind covers EVERY interface - including whatever wifi you are on. Use -Loopback or -Tailscale to narrow it.' -ForegroundColor Red
@@ -252,15 +299,25 @@ if ($watch -and $WatchInterval -lt 5) {
     $WatchInterval = 5
 }
 
-# --- Token ------------------------------------------------------------------
-# serve.mjs mints a fresh token on every start. In watch mode that would rotate
-# the secret on every restart and log out every open tab, so mint it once here
-# and pass it through unchanged.
-if ($isExposed -and -not $Token -and $watch) {
-    $bytes = New-Object byte[] 24
-    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
-    $Token = [Convert]::ToBase64String($bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=')
+# --- Is an authenticator paired? --------------------------------------------
+# serve.mjs refuses a non-loopback bind without one, but it does so after the
+# firewall notice and the URL list, which reads like the server started. Say it
+# here instead, and say how to fix it.
+$enrollmentFile = Join-Path $env:USERPROFILE '.work-hub\totp.json'
+$isEnrolled = Test-Path -LiteralPath $enrollmentFile
+
+if ($isExposed -and -not $isEnrolled) {
+    Write-Host ''
+    Write-Error "No authenticator is paired with this machine, so a $bindHost bind would be wide open. Pair one first:  .\run.ps1 -Enroll"
+    exit 1
+}
+if ($NoOtp -and $isExposed) {
+    Write-Error "-NoOtp cannot be combined with a $bindHost bind. Drop it, or add -Loopback."
+    exit 1
+}
+if (-not $isEnrolled) {
+    Write-Host "No authenticator paired, so nothing is gated. Pair one with:  .\run.ps1 -Enroll" -ForegroundColor Yellow
+    Write-Host ''
 }
 
 # --- Build the reachable-URL list -------------------------------------------
@@ -302,10 +359,43 @@ if ($OpenBrowser) {
     } -ArgumentList $localUrl | Out-Null
 }
 
+# --- Free the port before binding it ----------------------------------------
+# A previous run that lost its console, or anything else holding the port, makes
+# node exit immediately with "Port N is already in use". Kill whatever is
+# listening (and its children - serve.mjs spawns `claude`) and carry on.
+function Stop-ProcessOnPort {
+    param([int]$Port)
+
+    $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    if (-not $listeners) { return }
+
+    $owners = $listeners |
+        Select-Object -ExpandProperty OwningProcess -Unique |
+        Where-Object { $_ -and $_ -ne 0 -and $_ -ne $PID }
+
+    foreach ($owner in $owners) {
+        $existing = Get-Process -Id $owner -ErrorAction SilentlyContinue
+        $name = if ($existing) { $existing.ProcessName } else { 'unknown' }
+        Write-Host "Port $Port is held by $name (PID $owner); killing it." -ForegroundColor Yellow
+        & taskkill.exe /PID $owner /T /F 2>&1 | Out-Null
+        if ($existing) { [void]$existing.WaitForExit(5000) }
+    }
+
+    # taskkill returns before Windows tears the socket down, so wait for the port
+    # itself rather than for the process.
+    for ($i = 0; $i -lt 20; $i++) {
+        if (-not (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)) { return }
+        Start-Sleep -Milliseconds 250
+    }
+    Write-Host "Port $Port is still in use after killing its owner; node will report the conflict." -ForegroundColor Yellow
+}
+
+Stop-ProcessOnPort -Port $Port
+
 # --- Run the server ---------------------------------------------------------
 $serveScript = Join-Path $repoRoot 'src\serve.mjs'
 $nodeArgs = @($serveScript, '--port', "$Port", '--host', $bindHost)
-if ($Token) { $nodeArgs += @('--token', $Token) }
+if ($NoOtp) { $nodeArgs += '--no-otp' }
 
 # Start-Process joins -ArgumentList with spaces and quotes nothing, so any
 # argument holding a space (a repo path under "Program Files") has to arrive

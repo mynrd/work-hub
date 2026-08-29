@@ -28,7 +28,7 @@
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 
-import { MODELS, EFFORTS } from './config.mjs';
+import { ALLOWED_MODELS, EFFORTS } from './config.mjs';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -52,8 +52,8 @@ export function buildArgs({ sessionId = null, model, effort, permissionMode }) {
       return { ok: false, error: 'sessionId is not a valid session id.' };
     }
   }
-  if (!MODELS.includes(model)) {
-    return { ok: false, error: `model must be one of: ${MODELS.join(', ')}` };
+  if (!ALLOWED_MODELS.includes(model)) {
+    return { ok: false, error: `model must be one of: ${ALLOWED_MODELS.join(', ')}` };
   }
   if (!EFFORTS.includes(effort)) {
     return { ok: false, error: `effort must be one of: ${EFFORTS.join(', ')}` };

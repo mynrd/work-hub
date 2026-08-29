@@ -10,14 +10,27 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const MODELS = ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'];
+// Offered in the UI. `claude --model` resolves an alias to that family's newest
+// model when it spawns, so this list does not go stale when a new version ships -
+// at the cost of not knowing which version ran until the transcript names it.
+export const MODELS = ['opus', 'opus[1m]', 'sonnet', 'sonnet[1m]', 'haiku', 'fable', 'fable[1m]'];
+// What validation accepts. Wider than MODELS so a config pinned to an exact
+// version keeps working. This is an allowlist, not a hint: it is the only thing
+// stopping a model string from carrying extra argv into the spawn.
+export const ALLOWED_MODELS = [
+  ...MODELS,
+  'claude-opus-5', 'claude-opus-5[1m]',
+  'claude-sonnet-5', 'claude-sonnet-5[1m]',
+  'claude-haiku-4-5-20251001',
+  'claude-fable-5', 'claude-fable-5[1m]',
+];
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 export const PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions'];
 
 const DEFAULTS = {
   projects: [],
   usageIntervalMinutes: 5,
-  defaults: { model: 'claude-fable-5', effort: 'medium', permissionMode: 'default' },
+  defaults: { model: 'opus', effort: 'high', permissionMode: 'default' },
 };
 
 export function configDir(home = os.homedir()) {
@@ -54,7 +67,7 @@ function normalizeProjects(value) {
 function normalizeDefaults(value) {
   const src = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   return {
-    model: MODELS.includes(src.model) ? src.model : DEFAULTS.defaults.model,
+    model: ALLOWED_MODELS.includes(src.model) ? src.model : DEFAULTS.defaults.model,
     effort: EFFORTS.includes(src.effort) ? src.effort : DEFAULTS.defaults.effort,
     permissionMode: PERMISSION_MODES.includes(src.permissionMode) ? src.permissionMode : DEFAULTS.defaults.permissionMode,
   };

@@ -68,6 +68,13 @@ test('AC 11: a session id that is not a UUID is refused', () => {
   }
 });
 
+test('an alias passes through to --model verbatim; the CLI resolves the version', () => {
+  const built = buildArgs({ ...OK, model: 'opus[1m]' });
+  assert.equal(built.ok, true);
+  assert.deepEqual(built.args.slice(1, 3), ['--model', 'opus[1m]']);
+  assert.equal(buildArgs({ ...OK, model: 'opus[1m] --add-dir /' }).ok, false);
+});
+
 test('AC 11: a model, effort or permission mode outside the allowlist is refused', () => {
   assert.equal(buildArgs({ ...OK, model: 'gpt-4' }).ok, false);
   assert.equal(buildArgs({ ...OK, model: 'claude-fable-5 --dangerously-skip-permissions' }).ok, false);

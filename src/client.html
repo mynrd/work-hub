@@ -597,13 +597,16 @@
   </div>
 </div>
 
-<!-- Token prompt (only ever shown after a 401) -->
-<div class="overlay" id="tokenOverlay" role="dialog" aria-modal="true" aria-labelledby="tokenTitle">
+<!-- One-time code prompt (only ever shown after a 401) -->
+<div class="overlay" id="otpOverlay" role="dialog" aria-modal="true" aria-labelledby="otpTitle">
   <div class="modal modal--sm">
-    <div class="modal__head"><div><h3 id="tokenTitle">Access token required</h3><p>This server was started on a non-loopback address, so it prints a token on stdout. Paste it here; it is kept in this browser only.</p></div></div>
+    <div class="modal__head"><div><h3 id="otpTitle">Enter your code</h3><p>Open your authenticator and type the 6 digit code it shows for Work Hub. A correct code signs this browser in for 12 hours.</p></div></div>
     <div class="modal__body">
-      <input class="input" id="tokenInput" type="password" placeholder="X-Hub-Token" autocomplete="off" style="width:100%" />
-      <div class="row gap-2"><button type="button" class="btn btn-primary" id="tokenSaveBtn">Save and retry</button></div>
+      <input class="input" id="otpInput" type="text" inputmode="numeric" autocomplete="one-time-code"
+             maxlength="6" placeholder="000000" aria-describedby="otpError"
+             style="width:100%; font-family: var(--font-mono); font-size: 22px; letter-spacing: .4em; text-align: center" />
+      <p id="otpError" class="term-status is-error" style="padding:0; min-height:1.2em" role="alert"></p>
+      <div class="row gap-2"><button type="button" class="btn btn-primary" id="otpSubmitBtn">Sign in</button></div>
     </div>
   </div>
 </div>
@@ -614,7 +617,7 @@
 
   var THEME_KEY = 'work-hub-theme';
   var FULLSCREEN_KEY = 'work-hub-modal-fullscreen';
-  var TOKEN_KEY = 'work-hub-token';
+  var TOKEN_KEY = 'work-hub-session'; // a server-issued session, not a user secret
 
   // ─────────────────────────────────────────────────────────────
   // Theme
@@ -679,28 +682,89 @@
   function shortId(sid) { return String(sid || '').slice(0, 8); }
 
   // ─────────────────────────────────────────────────────────────
-  // API layer - every /api/* call carries the token when one is set.
-  // A 401 opens the token prompt rather than failing silently.
+  // API layer.
+  //
+  // The stored value is a session token the server handed out in exchange for
+  // a 6 digit code, not a secret the user knows. It expires, and a server
+  // restart invalidates it, so a 401 means "prove it again" rather than
+  // "you typed it wrong": the prompt asks for the current code and swaps it
+  // for a fresh session before replaying the request that failed.
   // ─────────────────────────────────────────────────────────────
   function getToken() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } }
   function setToken(t) { try { localStorage.setItem(TOKEN_KEY, t); } catch (e) { /* storage blocked */ } }
+  function clearToken() { try { localStorage.removeItem(TOKEN_KEY); } catch (e) { /* storage blocked */ } }
 
-  var tokenOverlay = document.getElementById('tokenOverlay');
-  var pendingAfterToken = null;
-  function askForToken(retry) {
-    pendingAfterToken = retry;
-    tokenOverlay.classList.add('is-open');
-    document.getElementById('tokenInput').focus();
+  var otpOverlay = document.getElementById('otpOverlay');
+  var otpInput = document.getElementById('otpInput');
+  var otpError = document.getElementById('otpError');
+  var otpSubmitBtn = document.getElementById('otpSubmitBtn');
+  var pendingAfterOtp = null;
+  var otpBusy = false;
+
+  function askForOtp(retry) {
+    // Several calls can 401 at once - the dashboard fires three on load. They
+    // all queue behind one prompt instead of stacking three of them.
+    var previous = pendingAfterOtp;
+    pendingAfterOtp = previous ? function () { previous(); retry(); } : retry;
+    if (otpOverlay.classList.contains('is-open')) return;
+    otpError.textContent = '';
+    otpInput.value = '';
+    otpOverlay.classList.add('is-open');
+    otpInput.focus();
   }
-  document.getElementById('tokenSaveBtn').addEventListener('click', function () {
-    setToken(document.getElementById('tokenInput').value.trim());
-    tokenOverlay.classList.remove('is-open');
-    var retry = pendingAfterToken;
-    pendingAfterToken = null;
-    if (retry) retry();
+
+  function submitOtp() {
+    if (otpBusy) return;
+    var code = otpInput.value.replace(/\D/g, '');
+    if (code.length !== 6) {
+      otpError.textContent = 'A code is 6 digits.';
+      return;
+    }
+    otpBusy = true;
+    otpSubmitBtn.disabled = true;
+    otpError.textContent = 'Checking...';
+
+    // Deliberately not through api(): this is the one call that must not carry
+    // a session token, and must not recurse into this prompt on a 401.
+    fetch('/api/auth/otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: code }),
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (payload) {
+        return { status: res.status, payload: payload };
+      });
+    }).then(function (result) {
+      otpBusy = false;
+      otpSubmitBtn.disabled = false;
+      if (result.status !== 200 || !result.payload.token) {
+        otpError.textContent = result.payload.error || ('Sign in failed (' + result.status + ').');
+        otpInput.value = '';
+        otpInput.focus();
+        return;
+      }
+      setToken(result.payload.token);
+      otpOverlay.classList.remove('is-open');
+      otpError.textContent = '';
+      var retry = pendingAfterOtp;
+      pendingAfterOtp = null;
+      if (retry) retry();
+    }, function (err) {
+      otpBusy = false;
+      otpSubmitBtn.disabled = false;
+      otpError.textContent = 'Cannot reach the server: ' + err.message;
+    });
+  }
+
+  otpSubmitBtn.addEventListener('click', submitOtp);
+  otpInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') submitOtp();
   });
-  document.getElementById('tokenInput').addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') document.getElementById('tokenSaveBtn').click();
+  otpInput.addEventListener('input', function () {
+    // Authy copies the code to the clipboard, so a paste lands all six at once.
+    var digits = otpInput.value.replace(/\D/g, '').slice(0, 6);
+    if (otpInput.value !== digits) otpInput.value = digits;
+    if (digits.length === 6) submitOtp();
   });
 
   function api(path, options) {
@@ -711,8 +775,9 @@
     if (opts.body) headers['Content-Type'] = 'application/json';
     return fetch(path, Object.assign({}, opts, { headers: headers })).then(function (res) {
       if (res.status === 401) {
+        clearToken(); // it is expired or from a previous run of the server
         return new Promise(function (resolve, reject) {
-          askForToken(function () { api(path, options).then(resolve, reject); });
+          askForOtp(function () { api(path, options).then(resolve, reject); });
         });
       }
       var isJson = (res.headers.get('content-type') || '').indexOf('json') !== -1;
@@ -1415,8 +1480,8 @@
   function composerDefaults() {
     var d = (state.config && state.config.defaults) || {};
     return {
-      model: composerDraft.model || d.model || 'claude-fable-5',
-      effort: composerDraft.effort || d.effort || 'medium',
+      model: composerDraft.model || d.model || 'opus',
+      effort: composerDraft.effort || d.effort || 'high',
       permissionMode: composerDraft.permissionMode || d.permissionMode || 'default',
     };
   }

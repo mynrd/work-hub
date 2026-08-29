@@ -1,5 +1,5 @@
-// AC 1, 2, 14, 15: arg parsing, config persistence and validation, the token
-// gate, and path safety on the project id / job folder / markdown file segments.
+// AC 1, 2, 14, 15: arg parsing, config persistence and validation, the one-time
+// code gate, and path safety on the project id / job folder / markdown segments.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseArgs, createServer } from '../src/serve.mjs';
+import { generateSecret, totp, STEP_SECONDS } from '../src/lib/totp.mjs';
 import { loadConfig, saveConfig, configPath, encodeProjectId, resolveProjectId, validateProjectPath, normalizeConfig } from '../src/lib/config.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -17,8 +18,8 @@ const PROJ_A = path.join(FIXTURES, 'proj-a');
 
 // ── AC 1: arguments ──────────────────────────────────────────────────────────
 
-test('AC 1: defaults are 127.0.0.1:8731', () => {
-  assert.deepEqual(parseArgs([]), { port: 8731, host: '127.0.0.1', token: null, noToken: false, open: false });
+test('AC 1: defaults are 127.0.0.1:5081', () => {
+  assert.deepEqual(parseArgs([]), { port: 5081, host: '127.0.0.1', noOtp: false, open: false });
 });
 
 test('AC 1: --port and --host accept both spaced and = forms', () => {
@@ -37,14 +38,16 @@ test('AC 1: a bad port or host fails with a message naming the flag', () => {
   assert.throws(() => parseArgs(['--frobnicate']), /Unknown argument/);
 });
 
-test('AC 14: --no-token with a non-loopback host refuses, naming the reason', () => {
-  assert.throws(() => parseArgs(['--lan', '--no-token']), /non-loopback bind requires a token/);
-  assert.doesNotThrow(() => parseArgs(['--no-token']));
+test('AC 14: --no-otp with a non-loopback host refuses, naming the reason', () => {
+  assert.throws(() => parseArgs(['--lan', '--no-otp']), /non-loopback bind is always gated/);
+  assert.throws(() => parseArgs(['--host', '192.168.1.5', '--no-otp']), /--no-otp/);
+  assert.doesNotThrow(() => parseArgs(['--no-otp']));
+  assert.equal(parseArgs(['--no-otp']).noOtp, true);
 });
 
-test('AC 14: a token shorter than 8 characters is refused', () => {
-  assert.throws(() => parseArgs(['--token', 'short']), /--token/);
-  assert.equal(parseArgs(['--token', 'long-enough-token']).token, 'long-enough-token');
+test('AC 14: --token is gone, not silently accepted', () => {
+  assert.throws(() => parseArgs(['--token', 'long-enough-token']), /Unknown argument/);
+  assert.throws(() => parseArgs(['--no-token']), /Unknown argument/);
 });
 
 // ── AC 2: config ─────────────────────────────────────────────────────────────
@@ -59,7 +62,7 @@ test('AC 2: a fresh machine loads the documented defaults', () => {
   assert.deepEqual(config, {
     projects: [],
     usageIntervalMinutes: 5,
-    defaults: { model: 'claude-fable-5', effort: 'medium', permissionMode: 'default' },
+    defaults: { model: 'opus', effort: 'high', permissionMode: 'default' },
   });
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -108,9 +111,14 @@ test('AC 5: unknown or wrongly-typed config fields are coerced, never fatal', ()
   const c = normalizeConfig({ projects: 'not an array', usageIntervalMinutes: -4, defaults: { model: 'gpt-4', effort: 'turbo' }, extra: true });
   assert.deepEqual(c.projects, []);
   assert.equal(c.usageIntervalMinutes, 5);
-  assert.equal(c.defaults.model, 'claude-fable-5');
-  assert.equal(c.defaults.effort, 'medium');
+  assert.equal(c.defaults.model, 'opus');
+  assert.equal(c.defaults.effort, 'high');
   assert.equal(c.extra, undefined);
+});
+
+test('a config pinned to an exact model id keeps it; the UI list only holds aliases', () => {
+  assert.equal(normalizeConfig({ defaults: { model: 'claude-opus-5[1m]' } }).defaults.model, 'claude-opus-5[1m]');
+  assert.equal(normalizeConfig({ defaults: { model: 'claude-opus-6' } }).defaults.model, 'opus');
 });
 
 test('duplicate paths are collapsed, case-insensitively', () => {
@@ -153,22 +161,108 @@ test('AC 1: GET / serves the dashboard page', async () => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('AC 14: with a token set, /api/* without the header is 401 but GET / still serves', async () => {
+// A code is only live for 30 seconds, so these tests mint their own secret and
+// read the current code off it rather than hard-coding digits.
+function postCode(get, code) {
+  return get('/api/auth/otp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+}
+
+test('AC 14: with a secret enrolled, /api/* without a session is 401 but GET / still serves', async () => {
   const home = tempHome();
-  await withServer({ home, token: 'a-secret-token' }, async (get) => {
+  await withServer({ home, otpSecret: generateSecret() }, async (get) => {
     assert.equal((await get('/')).status, 200);
     assert.equal((await get('/api/config')).status, 401);
     assert.equal((await get('/api/dashboard')).status, 401);
-    assert.equal((await get('/api/config', { headers: { 'X-Hub-Token': 'wrong-token-x' } })).status, 401);
-    assert.equal((await get('/api/config', { headers: { 'X-Hub-Token': 'a-secret-token' } })).status, 200);
+    assert.equal((await get('/api/config', { headers: { 'X-Hub-Token': 'not-a-session' } })).status, 401);
   });
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('AC 14: with no token every /api/* route is open (loopback default)', async () => {
+test('AC 14: a live code buys a session token that opens every /api/* route', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  await withServer({ home, otpSecret: secret }, async (get) => {
+    const res = await postCode(get, totp(secret));
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.match(body.token, /^[A-Za-z0-9_-]{43}$/);
+    assert.ok(body.expiresAt > Date.now());
+
+    const headers = { 'X-Hub-Token': body.token };
+    assert.equal((await get('/api/config', { headers })).status, 200);
+    assert.equal((await get('/api/dashboard', { headers })).status, 200);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 14: a wrong code is refused and hands out nothing', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  await withServer({ home, otpSecret: secret }, async (get) => {
+    const wrong = String((Number(totp(secret)) + 1) % 1000000).padStart(6, '0');
+    const res = await postCode(get, wrong);
+    assert.equal(res.status, 401);
+    const body = await res.json();
+    assert.equal(body.token, undefined);
+    assert.match(body.error, /not right/);
+
+    assert.equal((await postCode(get, '12')).status, 401);
+    assert.equal((await postCode(get, 'abcdef')).status, 401);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 14: the same code cannot be spent twice', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  await withServer({ home, otpSecret: secret }, async (get) => {
+    const code = totp(secret);
+    assert.equal((await postCode(get, code)).status, 200);
+    const replay = await postCode(get, code);
+    assert.equal(replay.status, 401);
+    assert.match((await replay.json()).error, /already been used/);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 14: five wrong codes lock the exchange out for a minute', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  await withServer({ home, otpSecret: secret }, async (get) => {
+    for (let i = 0; i < 5; i++) assert.equal((await postCode(get, '000000')).status, 401);
+    // Even the right code is refused while the lockout holds.
+    const res = await postCode(get, totp(secret));
+    assert.equal(res.status, 429);
+    const body = await res.json();
+    assert.ok(body.retryAfterSeconds > 0 && body.retryAfterSeconds <= 60);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 14: /api/auth/status says whether a code is needed, without needing one', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  await withServer({ home, otpSecret: secret }, async (get) => {
+    const gated = await (await get('/api/auth/status')).json();
+    assert.deepEqual(gated, { required: true, authenticated: false, digits: 6, periodSeconds: STEP_SECONDS });
+
+    const token = (await (await postCode(get, totp(secret))).json()).token;
+    const signedIn = await (await get('/api/auth/status', { headers: { 'X-Hub-Token': token } })).json();
+    assert.equal(signedIn.authenticated, true);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 14: with no secret enrolled every /api/* route is open and the exchange is gone', async () => {
   const home = tempHome();
   await withServer({ home }, async (get) => {
     assert.equal((await get('/api/config')).status, 200);
+    assert.equal((await get('/api/auth/otp', { method: 'POST', body: '{}' })).status, 404);
+    assert.deepEqual(await (await get('/api/auth/status')).json(), { required: false, authenticated: true, digits: 6, periodSeconds: STEP_SECONDS });
   });
   fs.rmSync(home, { recursive: true, force: true });
 });
