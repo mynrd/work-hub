@@ -538,6 +538,9 @@
         <p id="detailSubline"></p>
       </div>
       <div class="row gap-2">
+        <button type="button" class="btn btn-secondary btn-sm" id="detailResolveBtn" title="Mark every workflow step done in this job's progress.json">
+          <svg class="icon icon-sm"><use href="#i-check"/></svg> <span id="detailResolveLabel">Resolve</span>
+        </button>
         <button type="button" class="icon-btn" id="detailFullscreenBtn" aria-pressed="false" aria-label="Maximise" title="Maximise">
           <svg class="icon"><use href="#i-maximize" id="fullscreenIconUse"/></svg>
         </button>
@@ -1719,7 +1722,11 @@
   })();
   fullscreenBtn.addEventListener('click', function () { applyFullscreen(!modalEl.classList.contains('is-fullscreen')); });
 
+  // The job the dialog is currently showing - Resolve acts on this one.
+  var currentJob = null;
+
   function openDetail(job) {
+    currentJob = job;
     var idLabel = job.id !== null && job.id !== undefined ? String(job.id) : job.folder;
     document.getElementById('detailIdLabel').textContent = idLabel + ' ';
     document.getElementById('detailTitleId').textContent = job.title || '(untitled)';
@@ -1779,12 +1786,90 @@
         esc(t.label) + (n === null ? '' : ' <span class="badge badge-neutral">' + n + '</span>') + '</button>';
     }).join('');
     setActiveTab('ac');
+    setResolveState(job);
 
     overlay.classList.add('is-open');
     document.getElementById('detailCloseBtn').focus();
   }
 
-  function closeDetail() { overlay.classList.remove('is-open'); }
+  // ── Resolve ────────────────────────────────────────────────────────────────
+  // The only action in Work Hub that writes into a monitored folder: it sets
+  // every workflow step in the job's own progress.json to done, adding `build`
+  // and `human-verification` when the job's workflow never had them. Because it
+  // edits a real file in a real repo it takes two clicks, never one.
+
+  var REQUIRED_STEPS = ['build', 'human-verification'];
+  var resolveArmed = false;
+  var resolveTimer = null;
+  var resolveBtn = document.getElementById('detailResolveBtn');
+  var resolveLabel = document.getElementById('detailResolveLabel');
+
+  // Mirrors isResolved() in resolve-job.mjs.
+  function jobIsResolved(progress) {
+    var list = (progress && Array.isArray(progress.workflow) ? progress.workflow : []).filter(function (s) { return s; });
+    if (list.length === 0) return false;
+    var allDone = list.every(function (s) { return s && typeof s === 'object' && s.status === 'done'; });
+    var hasRequired = REQUIRED_STEPS.every(function (step) {
+      return list.some(function (s) { return s && typeof s === 'object' && s.step === step; });
+    });
+    return allDone && hasRequired;
+  }
+
+  function disarmResolve() {
+    resolveArmed = false;
+    if (resolveTimer) { clearTimeout(resolveTimer); resolveTimer = null; }
+    resolveBtn.classList.remove('btn-danger');
+    resolveBtn.classList.add('btn-secondary');
+  }
+
+  function setResolveState(job) {
+    disarmResolve();
+    if (jobIsResolved(job.progress)) {
+      resolveBtn.disabled = true;
+      resolveLabel.textContent = 'Resolved';
+      resolveBtn.title = 'Every workflow step is already done.';
+    } else {
+      resolveBtn.disabled = false;
+      resolveLabel.textContent = 'Resolve';
+      resolveBtn.title = "Mark every workflow step done in this job's progress.json";
+    }
+  }
+
+  resolveBtn.addEventListener('click', function () {
+    if (!currentJob || resolveBtn.disabled) return;
+
+    if (!resolveArmed) {
+      resolveArmed = true;
+      resolveLabel.textContent = 'Write to progress.json?';
+      resolveBtn.classList.remove('btn-secondary');
+      resolveBtn.classList.add('btn-danger');
+      // Arming lapses on its own, so a stray click never leaves the button
+      // sitting one accidental click away from editing a file.
+      resolveTimer = setTimeout(function () {
+        if (resolveArmed) setResolveState(currentJob);
+      }, 4000);
+      return;
+    }
+
+    disarmResolve();
+    resolveBtn.disabled = true;
+    resolveLabel.textContent = 'Writing…';
+    api('/api/projects/' + encodeURIComponent(currentJob.projectId) + '/jobs/' + encodeURIComponent(currentJob.folder) + '/resolve', { method: 'POST' })
+      .then(function () {
+        closeDetail();
+        // The job changes group, so the whole model is re-read rather than the
+        // row patched in place.
+        state.dashboard = null;
+        return loadDashboard().then(renderCurrentPage);
+      })
+      .catch(function (err) {
+        resolveBtn.disabled = false;
+        resolveLabel.textContent = 'Failed - retry';
+        resolveBtn.title = err.message;
+      });
+  });
+
+  function closeDetail() { overlay.classList.remove('is-open'); disarmResolve(); }
   document.getElementById('detailCloseBtn').addEventListener('click', closeDetail);
   overlay.addEventListener('click', function (e) { if (e.target === overlay) closeDetail(); });
   document.addEventListener('keydown', function (e) {

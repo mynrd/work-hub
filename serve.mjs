@@ -20,6 +20,7 @@ import { scanWorkFolder } from './workscan.mjs';
 import { listSessions, readSessionChat, resolveTranscriptDir } from './transcripts.mjs';
 import { createUsageCache } from './usage.mjs';
 import { createRunRegistry } from './claude-run.mjs';
+import { resolveJob } from './resolve-job.mjs';
 import { renderMarkdown } from './markdown.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -377,6 +378,17 @@ export function createServer({ token = null, home = undefined, runs = createRunR
       // /api/projects/:pid/jobs/:folder/md/:file
       if (parts[1] === 'jobs' && parts[3] === 'md' && parts.length === 5 && req.method === 'GET') {
         handleMarkdownRoute(res, projectPath, parts[2], parts[4]);
+        return;
+      }
+
+      // /api/projects/:pid/jobs/:folder/resolve - the only route that writes
+      // into a monitored folder.
+      if (parts[1] === 'jobs' && parts[3] === 'resolve' && parts.length === 4 && req.method === 'POST') {
+        const folder = decodeSegment(parts[2]);
+        if (!folder) { sendJson(res, 400, { error: 'Invalid job folder segment' }); return; }
+        const result = resolveJob(projectPath, folder);
+        if (!result.ok) { sendJson(res, result.status, { error: result.error }); return; }
+        sendJson(res, 200, { folder, workflow: result.workflow, added: result.added });
         return;
       }
 

@@ -297,3 +297,33 @@ test('a JSON body over 256 KB is refused with 413', async () => {
   });
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+test('the resolve route writes the job workflow and enforces path safety', async () => {
+  const home = tempHome();
+  // A throwaway copy of a project, so the fixture tree is never rewritten.
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-resolve-route-'));
+  fs.mkdirSync(path.join(project, '.work', 'a-job'), { recursive: true });
+  const file = path.join(project, '.work', 'a-job', 'progress.json');
+  fs.writeFileSync(file, JSON.stringify({ status: 'built', workflow: [{ step: 'dev-start', status: 'done' }] }, null, 2));
+  saveConfig({ projects: [project] }, home);
+  const pid = encodeProjectId(path.resolve(project));
+
+  await withServer({ home }, async (get) => {
+    const res = await get(`/api/projects/${pid}/jobs/a-job/resolve`, { method: 'POST' });
+    assert.equal(res.status, 200);
+    assert.deepEqual((await res.json()).added, ['build', 'human-verification']);
+    const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(after.workflow.map((s) => s.step), ['dev-start', 'build', 'human-verification']);
+    assert.ok(after.workflow.every((s) => s.status === 'done'));
+    assert.equal(after.status, 'built', 'the top-level status must not change');
+
+    // GET does not write; a traversal segment and an unknown project are refused.
+    assert.equal((await get(`/api/projects/${pid}/jobs/a-job/resolve`)).status, 404);
+    assert.equal((await get(`/api/projects/${pid}/jobs/..%2f..%2fescape/resolve`, { method: 'POST' })).status, 400);
+    assert.equal((await get(`/api/projects/D--not-configured/jobs/a-job/resolve`, { method: 'POST' })).status, 404);
+    assert.equal((await get(`/api/projects/${pid}/jobs/no-such-job/resolve`, { method: 'POST' })).status, 404);
+  });
+
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+});
