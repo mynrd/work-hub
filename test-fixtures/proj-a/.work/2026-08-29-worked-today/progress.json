@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 3,
+  "id": "2026-08-29-worked-today",
+  "title": "A job touched today",
+  "type": "task",
+  "status": "in_progress",
+  "created": "2026-08-29T01:00:00.000Z",
+  "updated": "2026-08-29T02:00:00.000Z",
+  "intake": {
+    "at": "2026-08-29T01:00:00.000Z",
+    "route": "plan",
+    "brief": { "project": "proj-a", "what": "Do the thing", "whoWhy": "Because", "unknowns": ["how"] },
+    "duplicateCheck": { "terms": ["thing"], "candidates": [] }
+  },
+  "workflow": [
+    { "step": "intake", "status": "done" },
+    { "step": "plan", "status": "done" },
+    { "step": "build", "status": "in_progress" },
+    { "step": "human-verification", "status": "pending" }
+  ],
+  "tasks": [{ "id": "T1", "title": "First task", "state": "done", "commits": ["abc1234"] }],
+  "acceptanceCriteria": [
+    { "id": "AC1", "text": "It works", "status": "pass", "evidence": "test" },
+    { "id": "AC2", "text": "It also works", "status": "implemented" },
+    { "id": "AC3", "text": "Not yet", "status": "pending" }
+  ],
+  "tests": { "unit": { "status": "pass", "command": "node --test", "cases": [{ "name": "case one", "status": "pass", "ac": ["AC1"] }] }, "ui": null },
+  "runs": [{ "round": 1, "started": "2026-08-29T01:30:00.000Z", "tasks": ["T1"], "agents": [] }]
+}

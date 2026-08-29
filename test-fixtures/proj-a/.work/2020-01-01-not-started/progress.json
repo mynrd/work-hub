@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 3,
+  "id": "2020-01-01-not-started",
+  "title": "Planned but never built",
+  "type": "story",
+  "status": "planned",
+  "workflow": [
+    { "step": "intake", "status": "done" },
+    { "step": "plan", "status": "done" },
+    { "step": "build", "status": "pending" },
+    { "step": "human-verification", "status": "pending" }
+  ],
+  "acceptanceCriteria": [{ "id": "AC1", "text": "Nothing yet", "status": "pending" }],
+  "runs": []
+}
