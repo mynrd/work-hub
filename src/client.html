@@ -1219,7 +1219,7 @@
     var head = '<div class="card__head"><div><h3>Conversations</h3><p>Claude Code sessions whose working directory is this folder.</p></div>' +
       '<div class="row gap-2">' +
         '<button type="button" class="btn btn-primary btn-sm" id="newConvBtn"><svg class="icon icon-sm"><use href="#i-plus"/></svg> New</button>' +
-        '<button type="button" class="btn btn-secondary btn-sm" id="terminalBtn" title="Open a terminal in this folder running: claude remote-control --spawn same-dir">' +
+        '<button type="button" class="btn btn-secondary btn-sm" id="terminalBtn" title="Open a terminal in this folder running: claude remote-control --spawn same-dir, with the session named &lt;computer name&gt; - &lt;folder name&gt;">' +
           '<svg class="icon icon-sm"><use href="#i-terminal"/></svg> <span id="terminalBtnLabel">Terminal</span></button>' +
       '</div></div>' +
       '<div class="term-status" id="terminalStatus" hidden></div>';
@@ -1302,7 +1302,11 @@
 
     setApp(
       '<div class="page-head"><div><h1>' + esc(project.name) + '</h1><p class="mono">' + esc(project.path) + '</p></div>' +
-      '<a class="btn btn-secondary" href="#/"><svg class="icon"><use href="#i-back"/></svg> Dashboard</a></div>' +
+      '<div class="row gap-2">' +
+        '<a class="btn btn-secondary" href="#/"><svg class="icon"><use href="#i-back"/></svg> Dashboard</a>' +
+        '<button type="button" class="btn btn-secondary" id="projectRefreshBtn" title="Re-scan .work/ and re-read the transcripts for this folder">' +
+          '<svg class="icon"><use href="#i-refresh"/></svg> <span id="projectRefreshLabel">Refresh</span></button>' +
+      '</div></div>' +
       (project.missing ? errorCard('This folder does not exist on disk right now.') : '') +
       '<div class="split">' +
         '<div>' +
@@ -1320,6 +1324,22 @@
     wireNewConversation(pid);
     wireTerminal(pid);
     wireSessionPager(pid);
+    wireProjectRefresh(pid);
+  }
+
+  /* Same two calls the 30s timer makes - the .work scan and the transcript
+     listing for this one folder - on demand. `renderCurrentPage` rebuilds the
+     page, and with it this button, so the label is not restored here. */
+  function wireProjectRefresh(pid) {
+    var btn = document.getElementById('projectRefreshBtn');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var label = document.getElementById('projectRefreshLabel');
+      if (btn.disabled) return;
+      btn.disabled = true;
+      if (label) label.textContent = 'Refreshing…';
+      Promise.all([loadJobs(pid), loadSessions(pid)]).then(renderCurrentPage);
+    });
   }
 
   function enterProject(pid) {
@@ -1604,8 +1624,10 @@
   }
 
   /* The one control that opens a window on the machine running the server -
-     `claude remote-control --spawn same-dir`, in this project's folder. Nothing
-     comes back but "it launched"; the session itself lives in that terminal. */
+     `claude remote-control --spawn same-dir`, in this project's folder, with
+     `--remote-control-session-name-prefix "<computer name> - <folder name>"` so
+     the session is identifiable from the phone. Nothing comes back but "it
+     launched"; the session itself lives in that terminal. */
   function wireTerminal(pid) {
     var btn = document.getElementById('terminalBtn');
     var status = document.getElementById('terminalStatus');

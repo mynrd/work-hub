@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { openTerminal, REMOTE_CONTROL_COMMAND } from '../src/lib/terminal.mjs';
+import { openTerminal, sessionNamePrefix, REMOTE_CONTROL_COMMAND } from '../src/lib/terminal.mjs';
 
 function fakeSpawn(calls) {
   return (cmd, args, opts) => {
@@ -22,13 +22,14 @@ const tempDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-terminal-'
 test('the launcher runs claude remote-control --spawn same-dir in a new console', () => {
   const dir = tempDir();
   const calls = [];
-  const result = openTerminal(dir, { spawnFn: fakeSpawn(calls), platform: 'win32' });
+  const result = openTerminal(dir, { spawnFn: fakeSpawn(calls), platform: 'win32', hostname: 'mynrd-dev' });
 
+  const prefix = `mynrd-dev - ${path.basename(dir)}`;
   assert.equal(result.ok, true);
-  assert.equal(result.command, 'claude remote-control --spawn same-dir');
+  assert.equal(result.command, `claude remote-control --spawn same-dir --remote-control-session-name-prefix ${prefix}`);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].cmd, 'cmd.exe');
-  assert.deepEqual(calls[0].args.slice(-5), ['/k', 'claude', 'remote-control', '--spawn', 'same-dir']);
+  assert.deepEqual(calls[0].args.slice(-7), ['/k', 'claude', 'remote-control', '--spawn', 'same-dir', '--remote-control-session-name-prefix', prefix]);
   assert.equal(calls[0].args[0], '/c');
   assert.equal(calls[0].args[1], 'start');
   assert.equal(calls[0].opts.cwd, dir);
@@ -37,11 +38,37 @@ test('the launcher runs claude remote-control --spawn same-dir in a new console'
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('the session name prefix is <computer name> - <folder name>', () => {
+  assert.equal(sessionNamePrefix(path.join('D:', 'Work', 'git', 'mynrd', 'work-hub'), { hostname: 'mynrd-dev' }), 'mynrd-dev - work-hub');
+  assert.equal(sessionNamePrefix(path.join('D:', 'Work', 'work-hub') + path.sep, { hostname: 'mynrd-dev' }), 'mynrd-dev - work-hub');
+});
+
+test('characters cmd.exe would act on are scrubbed out of the prefix', () => {
+  const prefix = sessionNamePrefix(path.join('D:', 'a', 'foo & bar %PATH% (x)^!'), { hostname: 'mynrd|dev' });
+  assert.equal(prefix, 'mynrd dev - foo bar PATH x');
+  for (const ch of ['&', '|', '^', '%', '(', ')', '!', '<', '>', '"']) assert.ok(!prefix.includes(ch), `prefix still has ${ch}`);
+  assert.ok(sessionNamePrefix(path.join('D:', 'a', 'x'.repeat(200)), { hostname: 'mynrd-dev' }).length <= 80);
+});
+
+test('when both halves scrub away to nothing the flag is left off', () => {
+  // Nothing survives the scrub, so there is no prefix to pass and Claude Code
+  // falls back to its own default.
+  assert.equal(sessionNamePrefix(path.join('D:', '&&&'), { hostname: '&&&' }), '');
+
+  // A hostname that scrubs to nothing still leaves the folder name.
+  const dir = tempDir();
+  const calls = [];
+  const result = openTerminal(dir, { spawnFn: fakeSpawn(calls), platform: 'win32', hostname: '&&&' });
+  assert.equal(result.command, `claude remote-control --spawn same-dir --remote-control-session-name-prefix ${path.basename(dir)}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('the project path travels as cwd, never as an argument', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'work hub & spaces-'));
   const calls = [];
   openTerminal(dir, { spawnFn: fakeSpawn(calls), platform: 'win32' });
   assert.ok(calls[0].args.every((a) => !a.includes(dir)));
+  assert.ok(calls[0].args.every((a) => !a.includes('&')));
   assert.equal(calls[0].opts.cwd, dir);
   fs.rmSync(dir, { recursive: true, force: true });
 });

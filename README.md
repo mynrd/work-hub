@@ -5,7 +5,7 @@ A local web dashboard over several project folders at once, plus a console for t
 The dashboard is a list of the folders you monitor and nothing more. Open one and it reads that folder, then:
 
 - **Jobs.** That folder's `.work/<job>/progress.json` files, grouped into **Worked today**, **Not yet started** and **Others**, with a tabbed detail dialog per job (Acceptance Criteria, Intake, Tasks, Tests, Runs, Docs, Raw).
-- **Conversations.** Every Claude Code session whose working directory was that folder, 20 to a page, rendered as a chat, with a composer that can reply to a session or start a new one by running `claude` for you. **Terminal** opens a real console window in that folder running `claude remote-control --spawn same-dir`.
+- **Conversations.** Every Claude Code session whose working directory was that folder, 20 to a page, rendered as a chat, with a composer that can reply to a session or start a new one by running `claude` for you. **Terminal** opens a real console window in that folder running `claude remote-control --spawn same-dir`, named `<computer name> - <folder name>` so you can tell the sessions apart on your phone.
 
 It also shows your real subscription usage, straight from `claude -p /usage`.
 
@@ -240,12 +240,16 @@ There is a hard 10-minute timeout per run. `-p` mode cannot answer an interactiv
 The button beside **New** opens a console window on the machine running the server, in that project's folder, running:
 
 ```text
-claude remote-control --spawn same-dir
+claude remote-control --spawn same-dir --remote-control-session-name-prefix "<computer name> - <folder name>"
 ```
+
+The prefix is what names the sessions in claude.ai/code and the mobile app. Claude Code's own default is just the hostname, so every project on this machine looked the same from the phone; with the prefix a session opened here reads `mynrd-dev - work-hub`.
 
 That is the one thing here that is not headless, and it is the answer to `-p` mode's permission-prompt problem: the session lives in a real terminal you can answer, and Remote Control lets you drive it from claude.ai or the mobile app.
 
-The launcher is `cmd.exe /c start "Work Hub - claude remote-control" cmd.exe /k claude remote-control --spawn same-dir`, spawned `detached` with `shell: false`. `start` is there because it is the only way to get a real console: with `stdio: 'ignore'` a bare `cmd /k` reads EOF from NUL and exits before you see it. It also honours your default terminal setting, so a Windows Terminal user gets a WT tab. Every argument above is a literal in `terminal.mjs` - the project path travels as the child's `cwd`, which is a `CreateProcess` parameter, not part of the command line.
+The launcher is `cmd.exe /c start "Work Hub - claude remote-control" cmd.exe /k claude remote-control --spawn same-dir`, spawned `detached` with `shell: false`. `start` is there because it is the only way to get a real console: with `stdio: 'ignore'` a bare `cmd /k` reads EOF from NUL and exits before you see it. It also honours your default terminal setting, so a Windows Terminal user gets a WT tab.
+
+Every argument above is a literal in `terminal.mjs` except the prefix, which ends in the folder's own name. `sessionNamePrefix` strips that down to `[A-Za-z0-9 ._-]` and caps it at 80 characters first, so none of the characters `cmd.exe` acts on (`&`, `|`, `^`, `%`, `(`, `)`, `!`, `<`, `>`) reach the command line; a folder called `foo & bar` becomes `mynrd-dev - foo bar`, and if a name scrubs away to nothing the flag is left off. The full project path is still never an argument - it travels as the child's `cwd`, which is a `CreateProcess` parameter, not part of the command line.
 
 Work Hub launches it and forgets it: no run is registered, no output is captured, and closing the page does not close the window.
 
@@ -261,7 +265,7 @@ Work Hub launches it and forgets it: no run is registered, no output is captured
 | GET / PUT | `/api/config` | the config; PUT validates every path with `statSync().isDirectory()` |
 | GET | `/api/dashboard` | `{ projects[] }` - id, path, name, `missing`, `hasWorkDir`. Two `statSync` calls per folder, nothing else |
 | GET | `/api/projects/:pid/jobs` | `{ today[], notStarted[], others[], unreadable[] }` for that one folder - the `.work` scan, on demand, no cache |
-| POST | `/api/projects/:pid/terminal` | opens a console on the **server's** desktop running `claude remote-control --spawn same-dir` |
+| POST | `/api/projects/:pid/terminal` | opens a console on the **server's** desktop running `claude remote-control --spawn same-dir --remote-control-session-name-prefix "<computer name> - <folder name>"` |
 | GET | `/api/projects/:pid/jobs/:folder/md/:file` | one `.md` rendered to HTML |
 | POST | `/api/projects/:pid/jobs/:folder/resolve` | marks the job's workflow done **in its `progress.json`** |
 | GET | `/api/projects/:pid/sessions` | session summaries |
