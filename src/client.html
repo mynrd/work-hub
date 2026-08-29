@@ -227,6 +227,17 @@
   .proj__name { font-weight: 650; font-size: var(--fs-md); display: flex; align-items: center; gap: var(--s-2); }
   .proj__path { font-family: var(--font-mono); font-size: 11px; color: var(--fg-subtle); overflow-wrap: anywhere; }
   .proj__stats { display: flex; gap: var(--s-3); font-size: var(--fs-xs); color: var(--fg-muted); flex-wrap: wrap; }
+  .spinner {
+    width: 14px; height: 14px; flex: none; border-radius: 99px;
+    border: 2px solid var(--border); border-top-color: var(--accent-400);
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+  .term-status { padding: 0 var(--s-5) var(--s-4); font-size: var(--fs-xs); color: var(--fg-muted); overflow-wrap: anywhere; }
+  .term-status.is-error { color: var(--danger-fg); font-family: var(--font-mono); white-space: pre-wrap; }
+  .pager { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-3) var(--s-4); border-top: 1px solid var(--border); }
+  .pager__info { font-size: var(--fs-xs); color: var(--fg-muted); margin-right: auto; font-family: var(--font-mono); }
   .dot-live { width: 8px; height: 8px; border-radius: 99px; background: var(--success); flex: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 25%, transparent); }
 
   /* ---------- Table ---------- */
@@ -504,6 +515,7 @@
   <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></symbol>
   <symbol id="i-back" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></symbol>
   <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
 </svg>
 
@@ -724,7 +736,9 @@
     dashboard: null,
     config: null,
     usage: null,
+    jobs: {},            // pid -> { today[], notStarted[], others[], unreadable[] }, loaded on demand
     sessions: {},        // pid -> { transcriptDir, sessions[] }
+    sessPage: {},        // pid -> 0-based page of the conversation list
     chat: null,          // { sessionId, messages[] }
     activeRun: null,
     search: '',
@@ -941,11 +955,11 @@
   }
 
   function findJob(pid, folder) {
-    var d = state.dashboard;
-    if (!d) return null;
-    var all = d.today.concat(d.notStarted, d.others);
+    var j = state.jobs[pid];
+    if (!j) return null;
+    var all = j.today.concat(j.notStarted, j.others);
     for (var i = 0; i < all.length; i++) {
-      if (all[i].projectId === pid && all[i].folder === folder) return all[i];
+      if (all[i].folder === folder) return all[i];
     }
     return null;
   }
@@ -953,24 +967,30 @@
   // ─────────────────────────────────────────────────────────────
   // Dashboard page
   // ─────────────────────────────────────────────────────────────
+  function matchesProjectSearch(p, q) {
+    if (!q) return true;
+    return (p.name + ' ' + p.path).toLowerCase().indexOf(q.toLowerCase()) !== -1;
+  }
+
   function projectsStripHtml(projects) {
     if (!projects || projects.length === 0) {
       return '<div class="card mb-5"><div class="card__head"><div><h3>Projects</h3><p>Nothing is being monitored yet.</p></div></div>' +
         emptyState('No projects configured', 'Add a folder in Settings. Work Hub reads its .work/ jobs and its Claude Code conversations.') + '</div>';
     }
-    return '<div class="card mb-5"><div class="card__head"><div><h3>Projects</h3><p>Every monitored folder. Click one for its jobs and conversations.</p></div>' +
-      '<span class="badge badge-neutral">' + projects.length + '</span></div><div class="card__body"><div class="strip">' +
-      projects.map(function (p) {
+    var filtered = projects.filter(function (p) { return matchesProjectSearch(p, state.search.trim()); });
+    var head = '<div class="card__head"><div><h3>Projects</h3><p>Every monitored folder. Click one to scan its jobs and list its conversations.</p></div>' +
+      '<span class="badge badge-neutral">' + filtered.length + '</span></div>';
+    if (filtered.length === 0) {
+      return '<div class="card mb-5">' + head + emptyState('No match', 'No monitored folder matches your search.') + '</div>';
+    }
+    return '<div class="card mb-5">' + head + '<div class="card__body"><div class="strip">' +
+      filtered.map(function (p) {
         return '<a class="proj' + (p.missing ? ' is-missing' : '') + '" href="#/p/' + esc(p.id) + '">' +
-          '<span class="proj__name">' + (p.liveSessions > 0 ? '<span class="dot-live"></span>' : '') + esc(p.name) + '</span>' +
+          '<span class="proj__name">' + esc(p.name) + '</span>' +
           '<span class="proj__path">' + esc(p.path) + '</span>' +
           (p.missing
             ? '<span class="badge badge-danger">folder is missing</span>'
-            : '<span class="proj__stats"><span>' + p.jobCount + ' job' + (p.jobCount === 1 ? '' : 's') + '</span>' +
-              '<span>' + p.sessionCount + ' conversation' + (p.sessionCount === 1 ? '' : 's') + '</span>' +
-              (p.hasWorkDir ? '' : '<span class="badge badge-neutral">no .work/</span>') +
-              (p.unreadableCount ? '<span class="badge badge-warning">' + p.unreadableCount + ' unreadable</span>' : '') + '</span>' +
-              '<span class="proj__stats"><span>' + esc(relativeTime(p.lastActivity)) + '</span></span>') +
+            : (p.hasWorkDir ? '' : '<span class="proj__stats"><span class="badge badge-neutral">no .work/</span></span>')) +
         '</a>';
       }).join('') + '</div></div></div>';
   }
@@ -981,17 +1001,12 @@
 
     setApp(
       '<div class="page-head"><div><h1>Dashboard</h1>' +
-      '<p>Jobs across every monitored folder, read live from each <span class="mono">progress.json</span>.</p></div></div>' +
+      '<p>Every monitored folder. Jobs and conversations are read when you open one, not before.</p></div></div>' +
       (d.loadError ? errorCard(d.loadError) : '') +
       usageCardHtml() +
-      projectsStripHtml(d.projects) +
-      jobTable('Worked today', 'A file under the job folder changed today.', d.today, 'info', true, 'Nothing has been touched today.') +
-      jobTable('Not yet started', 'Build is still pending and no run has been recorded.', d.notStarted, 'accent', true, 'Every job has been started.') +
-      jobTable('Others', 'Everything else.', d.others, 'neutral', true, 'Nothing here.') +
-      unreadableTable(d.unreadable, true)
+      projectsStripHtml(d.projects)
     );
     wireUsageCard();
-    wireJobRows();
   }
 
   function loadDashboard() {
@@ -1003,8 +1018,8 @@
   function enterDashboard() {
     renderCurrentPage();
     Promise.all([state.config ? Promise.resolve() : loadConfig(), loadDashboard(), loadUsage()]).then(renderCurrentPage);
-    // A dashboard left open should not go stale; the scan is cheap and cached
-    // transcript parses make the sessions count nearly free.
+    // Only the usage card and the folder list can change here now; neither
+    // touches .work/ or a transcript.
     timers.dashboard = setInterval(function () {
       Promise.all([loadDashboard(), loadUsage()]).then(renderCurrentPage);
     }, 30000);
@@ -1108,19 +1123,83 @@
     '</a>';
   }
 
+  var SESSIONS_PER_PAGE = 20;
+  var snappedSid = null;   // the conversation the pager has already jumped to
+
+  /** Clamps the stored page to what the current list actually has. */
+  function sessionPage(pid, total) {
+    var pages = Math.max(1, Math.ceil(total / SESSIONS_PER_PAGE));
+    var page = state.sessPage[pid] || 0;
+    if (page > pages - 1) page = pages - 1;
+    if (page < 0) page = 0;
+    state.sessPage[pid] = page;
+    return page;
+  }
+
+  function pagerHtml(page, total) {
+    var pages = Math.max(1, Math.ceil(total / SESSIONS_PER_PAGE));
+    if (pages < 2) return '';
+    var from = page * SESSIONS_PER_PAGE + 1;
+    var to = Math.min(total, (page + 1) * SESSIONS_PER_PAGE);
+    return '<div class="pager">' +
+      '<span class="pager__info">' + from + '-' + to + ' of ' + total + '</span>' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-page="' + (page - 1) + '"' + (page === 0 ? ' disabled' : '') + '>Prev</button>' +
+      '<span class="pager__info">' + (page + 1) + ' / ' + pages + '</span>' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-page="' + (page + 1) + '"' + (page >= pages - 1 ? ' disabled' : '') + '>Next</button>' +
+    '</div>';
+  }
+
   function sessionsCardHtml(pid, activeSid) {
     var data = state.sessions[pid];
     var head = '<div class="card__head"><div><h3>Conversations</h3><p>Claude Code sessions whose working directory is this folder.</p></div>' +
-      '<button type="button" class="btn btn-primary btn-sm" id="newConvBtn"><svg class="icon icon-sm"><use href="#i-plus"/></svg> New</button></div>';
-    if (!data) return '<div class="card">' + head + '<div class="card__body"><p class="muted">Loading…</p></div></div>';
+      '<div class="row gap-2">' +
+        '<button type="button" class="btn btn-primary btn-sm" id="newConvBtn"><svg class="icon icon-sm"><use href="#i-plus"/></svg> New</button>' +
+        '<button type="button" class="btn btn-secondary btn-sm" id="terminalBtn" title="Open a terminal in this folder running: claude remote-control --spawn same-dir">' +
+          '<svg class="icon icon-sm"><use href="#i-terminal"/></svg> <span id="terminalBtnLabel">Terminal</span></button>' +
+      '</div></div>' +
+      '<div class="term-status" id="terminalStatus" hidden></div>';
+    if (!data) {
+      return '<div class="card">' + head + '<div class="card__body row gap-2"><span class="spinner" aria-hidden="true"></span><span class="muted fs-sm">Loading…</span></div></div>';
+    }
     if (!data.transcriptDir) {
       return '<div class="card">' + head + emptyState('No conversations yet', 'Claude Code has never run with this folder as its working directory.') + '</div>';
     }
     if (data.sessions.length === 0) {
       return '<div class="card">' + head + emptyState('No conversations yet', 'The transcript folder exists but holds no sessions.') + '</div>';
     }
+    // The open conversation must stay visible even if it sits on page 4, so
+    // opening one moves the pager to whichever page holds it. Once only: the
+    // chat repaints every 3 seconds during a run, and re-snapping each time
+    // would undo a Next click the moment the poll came back.
+    if (activeSid && snappedSid !== activeSid) {
+      for (var i = 0; i < data.sessions.length; i++) {
+        if (data.sessions[i].sessionId === activeSid) { state.sessPage[pid] = Math.floor(i / SESSIONS_PER_PAGE); break; }
+      }
+      snappedSid = activeSid;
+    }
+    var page = sessionPage(pid, data.sessions.length);
+    var slice = data.sessions.slice(page * SESSIONS_PER_PAGE, (page + 1) * SESSIONS_PER_PAGE);
     return '<div class="card">' + head + '<div class="sess">' +
-      data.sessions.map(function (s) { return sessionRowHtml(pid, s, activeSid); }).join('') + '</div></div>';
+      slice.map(function (s) { return sessionRowHtml(pid, s, activeSid); }).join('') + '</div>' +
+      pagerHtml(page, data.sessions.length) + '</div>';
+  }
+
+  function wireSessionPager(pid) {
+    var pager = app.querySelector('.pager');
+    if (!pager) return;
+    pager.querySelectorAll('button[data-page]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (btn.disabled) return;
+        state.sessPage[pid] = Number(btn.getAttribute('data-page'));
+        renderCurrentPage();
+      });
+    });
+  }
+
+  function loadJobs(pid) {
+    return api('/api/projects/' + encodeURIComponent(pid) + '/jobs')
+      .then(function (data) { state.jobs[pid] = data; })
+      .catch(function (err) { state.error = err.message; });
   }
 
   function loadSessions(pid) {
@@ -1140,16 +1219,21 @@
     return null;
   }
 
-  function filterByProject(list, pid) {
-    return (list || []).filter(function (j) { return j.projectId === pid; });
+  function loadingCard(title, text) {
+    return '<div class="card mb-5"><div class="card__head"><div><h3>' + esc(title) + '</h3><p>' + esc(text) + '</p></div>' +
+      '<span class="spinner" aria-hidden="true"></span></div>' +
+      '<div class="card__body"><p class="muted fs-sm">Loading…</p></div></div>';
   }
 
   function renderProject() {
     var pid = state.route.pid;
-    var d = state.dashboard;
     var project = projectOf(pid);
-    if (!d) { setApp('<p class="muted">Loading…</p>'); return; }
-    if (!project) { setApp(errorCard('No configured project with id ' + pid + '. It may have been removed in Settings.')); return; }
+    if (!project) {
+      if (!state.dashboard) { setApp(loadingCard('Project', 'Reading the configured folders.')); return; }
+      setApp(errorCard('No configured project with id ' + pid + '. It may have been removed in Settings.'));
+      return;
+    }
+    var jobs = state.jobs[pid];
 
     setApp(
       '<div class="page-head"><div><h1>' + esc(project.name) + '</h1><p class="mono">' + esc(project.path) + '</p></div>' +
@@ -1157,27 +1241,33 @@
       (project.missing ? errorCard('This folder does not exist on disk right now.') : '') +
       '<div class="split">' +
         '<div>' +
-          jobTable('Worked today', 'A file under the job folder changed today.', filterByProject(d.today, pid), 'info', false, 'Nothing has been touched today.') +
-          jobTable('Not yet started', 'Build is still pending and no run has been recorded.', filterByProject(d.notStarted, pid), 'accent', false, 'Every job has been started.') +
-          jobTable('Others', 'Everything else.', filterByProject(d.others, pid), 'neutral', false, 'Nothing here.') +
-          unreadableTable(d.unreadable.filter(function (u) { return u.projectId === pid; }), false) +
+          (jobs
+            ? jobTable('Worked today', 'A file under the job folder changed today.', jobs.today, 'info', false, 'Nothing has been touched today.') +
+              jobTable('Not yet started', 'Build is still pending and no run has been recorded.', jobs.notStarted, 'accent', false, 'Every job has been started.') +
+              jobTable('Others', 'Everything else.', jobs.others, 'neutral', false, 'Nothing here.') +
+              unreadableTable(jobs.unreadable, false)
+            : loadingCard('Jobs', 'Scanning .work/ in this folder.')) +
         '</div>' +
         '<div>' + sessionsCardHtml(pid, null) + '</div>' +
       '</div>'
     );
     wireJobRows();
     wireNewConversation(pid);
+    wireTerminal(pid);
+    wireSessionPager(pid);
   }
 
   function enterProject(pid) {
     renderCurrentPage();
-    Promise.all([
-      state.config ? Promise.resolve() : loadConfig(),
-      state.dashboard ? Promise.resolve() : loadDashboard(),
-      loadSessions(pid),
-    ]).then(renderCurrentPage);
+    // The scan and the transcript listing both start now, on this one project,
+    // and each repaints as it lands - the sessions card does not wait for the
+    // .work scan, and vice versa.
+    (state.config ? Promise.resolve() : loadConfig()).then(renderCurrentPage);
+    (state.dashboard ? Promise.resolve() : loadDashboard()).then(renderCurrentPage);
+    loadJobs(pid).then(renderCurrentPage);
+    loadSessions(pid).then(renderCurrentPage);
     timers.dashboard = setInterval(function () {
-      Promise.all([loadDashboard(), loadSessions(pid)]).then(renderCurrentPage);
+      Promise.all([loadJobs(pid), loadSessions(pid)]).then(renderCurrentPage);
     }, 30000);
   }
 
@@ -1448,6 +1538,33 @@
     }, 1000);
   }
 
+  /* The one control that opens a window on the machine running the server -
+     `claude remote-control --spawn same-dir`, in this project's folder. Nothing
+     comes back but "it launched"; the session itself lives in that terminal. */
+  function wireTerminal(pid) {
+    var btn = document.getElementById('terminalBtn');
+    var status = document.getElementById('terminalStatus');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var label = document.getElementById('terminalBtnLabel');
+      btn.disabled = true;
+      if (label) label.textContent = 'Opening…';
+      var show = function (text, isError) {
+        if (!status) return;
+        status.hidden = false;
+        status.className = 'term-status' + (isError ? ' is-error' : '');
+        status.textContent = text;
+      };
+      api('/api/projects/' + encodeURIComponent(pid) + '/terminal', { method: 'POST' })
+        .then(function (r) { show('Terminal opened in ' + r.cwd + ' running: ' + r.command, false); })
+        .catch(function (err) { show(err.message, true); })
+        .then(function () {
+          btn.disabled = false;
+          if (label) label.textContent = 'Terminal';
+        });
+    });
+  }
+
   function wireNewConversation(pid) {
     var btn = document.getElementById('newConvBtn');
     if (!btn) return;
@@ -1500,12 +1617,49 @@
     );
     wireComposer(pid, isNew ? null : sid);
     wireNewConversation(pid);
+    wireTerminal(pid);
+    wireSessionPager(pid);
+    scrollChatToEnd(sid);
+  }
+
+  /* A conversation opens at its newest message, the way every chat client does.
+     Once open it only auto-follows while the reader is already at the bottom -
+     the transcript is re-read every 3 seconds during a run, and yanking someone
+     back down mid-scroll would make an in-flight reply unreadable. */
+  var chatScroll = { sid: null, count: -1, atEnd: true };
+
+  function scrollerAtEnd() {
+    var el = document.scrollingElement || document.documentElement;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  }
+
+  window.addEventListener('scroll', function () {
+    if (state.route.name === 'conversation') chatScroll.atEnd = scrollerAtEnd();
+  }, { passive: true });
+
+  function scrollChatToEnd(sid) {
+    if (!state.chat || !state.chat.messages || state.chat.messages.length === 0) return;
+    var count = state.chat.messages.length;
+    var isNewView = chatScroll.sid !== sid;
+    var grew = count !== chatScroll.count;
+    chatScroll.sid = sid;
+    chatScroll.count = count;
+    if (!isNewView && !(grew && chatScroll.atEnd)) return;
+    // After setApp() the new markup is in the DOM but not laid out yet, so the
+    // scrollHeight to jump to does not exist until the next frame.
+    requestAnimationFrame(function () {
+      var el = document.scrollingElement || document.documentElement;
+      el.scrollTop = el.scrollHeight;
+      chatScroll.atEnd = true;
+    });
   }
 
   function enterConversation(pid, sid) {
     state.chat = null;
     composerDraft.text = '';
     state.activeRun = null;
+    chatScroll = { sid: null, count: -1, atEnd: true };
+    snappedSid = null;
     renderCurrentPage();
     Promise.all([
       state.config ? Promise.resolve() : loadConfig(),
@@ -1856,11 +2010,11 @@
     resolveLabel.textContent = 'Writing…';
     api('/api/projects/' + encodeURIComponent(currentJob.projectId) + '/jobs/' + encodeURIComponent(currentJob.folder) + '/resolve', { method: 'POST' })
       .then(function () {
+        var pid = currentJob.projectId;
         closeDetail();
-        // The job changes group, so the whole model is re-read rather than the
-        // row patched in place.
-        state.dashboard = null;
-        return loadDashboard().then(renderCurrentPage);
+        // The job changes group, so that project is re-scanned rather than the
+        // row patched in place. Only that project - nothing else moved.
+        return loadJobs(pid).then(renderCurrentPage);
       })
       .catch(function (err) {
         resolveBtn.disabled = false;
@@ -1918,12 +2072,11 @@
   });
 
   document.getElementById('refreshBtn').addEventListener('click', function () {
-    state.dashboard = null;
     var r = state.route;
     if (r.name === 'conversation') {
-      Promise.all([loadChat(r.pid, r.sid), loadSessions(r.pid), loadDashboard()]).then(renderCurrentPage);
+      Promise.all([loadChat(r.pid, r.sid), loadSessions(r.pid)]).then(renderCurrentPage);
     } else if (r.name === 'project') {
-      Promise.all([loadDashboard(), loadSessions(r.pid)]).then(renderCurrentPage);
+      Promise.all([loadJobs(r.pid), loadSessions(r.pid)]).then(renderCurrentPage);
     } else {
       Promise.all([loadConfig(), loadDashboard(), loadUsage()]).then(renderCurrentPage);
     }

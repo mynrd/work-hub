@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { renderMarkdown } from './markdown.mjs';
+import { renderMarkdown } from '../src/lib/markdown.mjs';
 
 test('renderMarkdown converts ATX headings h1 through h6', () => {
   const html = renderMarkdown('# H1\n## H2\n###### H6');

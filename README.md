@@ -2,10 +2,10 @@
 
 A local web dashboard over several project folders at once, plus a console for the Claude Code conversations that happened in them.
 
-Two things in one page:
+The dashboard is a list of the folders you monitor and nothing more. Open one and it reads that folder, then:
 
-- **Jobs.** Every configured folder is scanned for `.work/<job>/progress.json` and the jobs are grouped into **Worked today**, **Not yet started** and **Others**, with a tabbed detail dialog per job (Acceptance Criteria, Intake, Tasks, Tests, Runs, Docs, Raw).
-- **Conversations.** Every Claude Code session whose working directory was that folder, rendered as a chat, with a composer that can reply to a session or start a new one by running `claude` for you.
+- **Jobs.** That folder's `.work/<job>/progress.json` files, grouped into **Worked today**, **Not yet started** and **Others**, with a tabbed detail dialog per job (Acceptance Criteria, Intake, Tasks, Tests, Runs, Docs, Raw).
+- **Conversations.** Every Claude Code session whose working directory was that folder, 20 to a page, rendered as a chat, with a composer that can reply to a session or start a new one by running `claude` for you. **Terminal** opens a real console window in that folder running `claude remote-control --spawn same-dir`.
 
 It also shows your real subscription usage, straight from `claude -p /usage`.
 
@@ -16,18 +16,37 @@ Node built-ins only. No `package.json`, no `npm install`, no dependencies.
 ## Run it
 
 ```powershell
-.\run.ps1                 # loopback only - http://127.0.0.1:8731/
-.\run.ps1 -OpenBrowser    # same, and open the browser once it answers
+.\run.ps1                       # every interface, and restarts when main moves
+.\run.ps1 -OpenBrowser          # same, and open the browser once it answers
+.\run.ps1 -Loopback -NoWatch    # 127.0.0.1 only, no git polling
 ```
+
+The default bind is `0.0.0.0`, so the LAN address, the Tailscale `100.x` address and the
+NordVPN Meshnet address all answer on the same port. Every one of them is printed on start:
+
+```
+Reachable at:
+  http://127.0.0.1:8731/
+  http://192.168.1.42:8731/
+  http://100.97.229.12:8731/
+```
+
+Narrow it with `-Loopback`, `-Tailscale`, or `-BindAddress <ip>`.
+
+While the server runs and the branch is `main` with a clean working tree, `run.ps1` fetches
+`origin/main` every 60 seconds (`-WatchInterval`) and restarts the server on a new commit.
+The pull is `--ff-only`, and a dirty tree is left alone until it is clean again. `-NoWatch`
+turns the polling off. If node exits on its own the script exits with it - a broken commit
+does not become a restart loop.
 
 or directly:
 
 ```powershell
-node serve.mjs                        # 127.0.0.1:8731
-node serve.mjs --port 9000            # a different port
-node serve.mjs --host 192.168.1.20    # a specific interface (token required)
-node serve.mjs --lan                  # every interface  (token required)
-node serve.mjs --token my-secret-here # supply the token instead of generating one
+node src/serve.mjs                        # 127.0.0.1:8731
+node src/serve.mjs --port 9000            # a different port
+node src/serve.mjs --host 192.168.1.20    # a specific interface (token required)
+node src/serve.mjs --lan                  # every interface  (token required)
+node src/serve.mjs --token my-secret-here # supply the token instead of generating one
 ```
 
 On start it prints the bound address and the config file path. A port already in use, or an address this machine does not own, fails with a one-line message naming the flag to change, and exits 1.
@@ -37,6 +56,7 @@ On start it prints the bound address and the config file path. A port already in
 - **Node 18+** (developed against v26.7.0).
 - **`claude` on PATH and signed in.** The Plan Usage card and every reply shell out to it.
 - Read access to `~/.claude/projects`, where Claude Code keeps its transcripts.
+- **Windows** for the **Terminal** button only. It shells out to `cmd /c start`; everywhere else that one button answers 501 and names the command to run by hand. Nothing else in Work Hub is Windows-only.
 
 ---
 
@@ -44,16 +64,16 @@ On start it prints the bound address and the config file path. A port already in
 
 **This is not a read-only viewer.** It can start `claude` under your account, in your project folders, spending your subscription. A run started from the page can edit files - the Permissions select even offers `bypassPermissions`, which is `--dangerously-skip-permissions`.
 
-That is checked, not assumed: in `-p` mode with the default permission mode, a `Write` tool call executed and the file appeared on disk with no prompt (see the spike notes at the top of [claude-run.mjs](claude-run.mjs)). "Headless" does not mean "read only".
+That is checked, not assumed: in `-p` mode with the default permission mode, a `Write` tool call executed and the file appeared on disk with no prompt (see the spike notes at the top of [claude-run.mjs](src/lib/claude-run.mjs)). "Headless" does not mean "read only".
 
 So:
 
-- The default bind is **loopback only**. Nothing off this machine can reach it.
+- `serve.mjs` on its own still defaults to **loopback only**. `run.ps1` defaults to `0.0.0.0`, which is why it always demands a token and prints the warning below; `-Loopback` puts it back.
 - Any **non-loopback bind requires a token**. `serve.mjs` generates one and prints it, or you pass `--token <secret>`. Every `/api/*` request must carry it as the `X-Hub-Token` header; the page asks for it once and keeps it in `localStorage`. `GET /` is always served so the token can be entered.
 - `--no-token` exists for loopback only. Combining it with a non-loopback host refuses to start.
 - Binding beyond loopback also needs a Windows Firewall inbound-allow rule. `run.ps1` checks for one and prints the exact `New-NetFirewallRule` command; it never creates one, because that needs elevation.
 
-Anyone who reaches the port and holds the token can read every file under your `.work/` folders, read every Claude Code transcript for the monitored projects, and start new Claude runs. Treat the token like an SSH key.
+Anyone who reaches the port and holds the token can read every file under your `.work/` folders, read every Claude Code transcript for the monitored projects, start new Claude runs, and **open a terminal window on the machine running the server** - the Terminal button is a `POST` that spawns `cmd /c start`, so a console appears on your desktop running `claude remote-control --spawn same-dir`, which then accepts work from claude.ai and the mobile app. Treat the token like an SSH key.
 
 The message you type is never an argument. On Windows `claude` resolves to `claude.cmd`, which Node will only spawn with `shell: true`, and with `shell: true` Node does not escape argv. So every argument is an allowlisted token or a UUID matched against a regex, and the message itself goes over the child's stdin.
 
@@ -78,6 +98,8 @@ Edit it from the **Settings** page. Adding a path that does not exist is refused
 
 `usageIntervalMinutes: 0` means the Plan Usage card only refreshes when you click Refresh.
 
+`claude -p /usage` is itself a Claude Code session, so it writes a transcript. It runs with `~/.claude` as its working directory - not a monitored project - so those one-turn `/usage` sessions collect under `~/.claude/projects/` for that folder instead of appearing in a project's Conversations list every few minutes. If `~/.claude` is not there it falls back to the home folder.
+
 A hand-mangled config never stops the server: unknown or wrongly-typed fields fall back to the defaults, and a file that is not valid JSON loads as empty with the reason shown at the top of the dashboard.
 
 ---
@@ -85,19 +107,37 @@ A hand-mangled config never stops the server: unknown or wrongly-typed fields fa
 ## How the pieces map
 
 ```text
-serve.mjs            HTTP server, arg parsing, routes, token check
-run.ps1              PowerShell wrapper: bind selection, firewall check, exposure warning
-client.html          the whole UI - markup, CSS and JS inline, no build step
-config.mjs           ~/.work-hub/config.json, path validation, the model/effort/permission allowlists
-workscan.mjs         scanWorkFolder(projectPath, {now}) -> { today, notStarted, others, unreadable }
-resolve-job.mjs      Resolve - the one writer into a monitored folder, format-preserving
-transcripts.mjs      encodeProjectFolder(), listSessions(), readSessionChat()
-usage.mjs            fetchCliUsage() + parseUsage() + the refresh timer
-claude-run.mjs       buildArgs(), the run registry, the spawn
-markdown.mjs         the Docs tab renderer (copied verbatim from work-viewer)
-*.test.mjs           node --test
-test-fixtures/       .work trees, a transcript, /usage samples
+run.ps1                  PowerShell wrapper: bind selection, firewall check, exposure warning,
+                         and the watch loop that restarts the server when main moves
+
+src/serve.mjs            HTTP server, arg parsing, routes, token check
+src/client.html          the whole UI - markup, CSS and JS inline, no build step
+
+src/lib/config.mjs       ~/.work-hub/config.json, path validation, the model/effort/permission allowlists
+src/lib/workscan.mjs     scanWorkFolder(projectPath, {now}) -> { today, notStarted, others, unreadable }
+src/lib/resolve-job.mjs  Resolve - the one writer into a monitored folder, format-preserving
+src/lib/transcripts.mjs  encodeProjectFolder(), listSessions(), readSessionChat()
+src/lib/usage.mjs        fetchCliUsage() + parseUsage() + usageCwd() + the refresh timer
+src/lib/claude-run.mjs   buildArgs(), the run registry, the spawn
+src/lib/terminal.mjs     openTerminal() - the Terminal button's `cmd /c start`
+src/lib/markdown.mjs     the Docs tab renderer (copied verbatim from work-viewer)
+
+test/*.test.mjs          node --test
+test/fixtures/           .work trees, a transcript, /usage samples
 ```
+
+### What loads when
+
+The dashboard asks for `/api/dashboard`, which reads the config and calls `statSync` twice per folder - does it exist, does it have a `.work/`. That is all. It never walks a job folder and never opens a transcript.
+
+Clicking a project box fires two independent requests for that one folder, and each half of the page paints as its own answer lands:
+
+| Request | What it costs |
+|---|---|
+| `GET /api/projects/:pid/jobs` | `scanWorkFolder`, which recurses every job folder for its newest mtime |
+| `GET /api/projects/:pid/sessions` | every `.jsonl` in that folder's transcript directory, parsed and cached against `size + mtime` |
+
+Neither runs for a folder nobody opened. With a dozen monitored projects the old dashboard paid for all of them, every 30 seconds, to render a strip of boxes. Each half of the project page shows a spinner until its own answer arrives.
 
 ### Grouping
 
@@ -136,6 +176,10 @@ D:\Work\git\mynrd\work-hub  ->  D--Work-git-mynrd-work-hub
 
 Windows creates that folder with either drive-letter case and treats the two as one, so the lookup matches case-insensitively.
 
+The list is paged, 20 rows to a page, newest first - a folder with 300 sessions renders 20 of them. Opening a conversation moves the pager to whichever page holds it, so the open one is always visible in the list beside the chat.
+
+Opening a conversation scrolls straight to its newest message. From then on the page only follows new messages while you are already at the bottom (within 120px): the transcript is re-read every 3 seconds during a run, and yanking the view down mid-scroll would make an in-flight reply unreadable.
+
 A session row shows the title (from an `ai-title` record, else the first non-meta user prompt truncated to 80 characters), the short id, first and last timestamps, message count, the distinct models seen, the subagent transcript count, and a live dot when the file was written in the last 45 seconds. Sidechain records (a subagent's turns spliced into the main file) do not count as messages. Parsed summaries are cached in memory against `size + mtime`, so a refresh only re-reads files that actually changed.
 
 **Nothing in a transcript is ever dropped.** User turns, assistant text, tool calls and results, thinking, slash-command chips, compact summaries and IDE context each get their own rendering; every other record type or content block shows as a collapsed raw-JSON block labelled `record: <type>` / `attachment: <type>` / `block: <type>`. Claude Code changes these shapes between versions - the raw fallback is what keeps the viewer honest, so never add a denylist.
@@ -156,6 +200,20 @@ A new conversation is the same thing without `-r`; when the child reports its `s
 
 There is a hard 10-minute timeout per run. `-p` mode cannot answer an interactive permission prompt - the Permissions select is the only control you have over that.
 
+### Terminal
+
+The button beside **New** opens a console window on the machine running the server, in that project's folder, running:
+
+```text
+claude remote-control --spawn same-dir
+```
+
+That is the one thing here that is not headless, and it is the answer to `-p` mode's permission-prompt problem: the session lives in a real terminal you can answer, and Remote Control lets you drive it from claude.ai or the mobile app.
+
+The launcher is `cmd.exe /c start "Work Hub - claude remote-control" cmd.exe /k claude remote-control --spawn same-dir`, spawned `detached` with `shell: false`. `start` is there because it is the only way to get a real console: with `stdio: 'ignore'` a bare `cmd /k` reads EOF from NUL and exits before you see it. It also honours your default terminal setting, so a Windows Terminal user gets a WT tab. Every argument above is a literal in `terminal.mjs` - the project path travels as the child's `cwd`, which is a `CreateProcess` parameter, not part of the command line.
+
+Work Hub launches it and forgets it: no run is registered, no output is captured, and closing the page does not close the window.
+
 ---
 
 ## Routes
@@ -164,7 +222,9 @@ There is a hard 10-minute timeout per run. `-p` mode cannot answer an interactiv
 |---|---|---|
 | GET | `/` | `client.html` |
 | GET / PUT | `/api/config` | the config; PUT validates every path with `statSync().isDirectory()` |
-| GET | `/api/dashboard` | `{ projects[], today[], notStarted[], others[], unreadable[] }` - re-scanned every call, no cache |
+| GET | `/api/dashboard` | `{ projects[] }` - id, path, name, `missing`, `hasWorkDir`. Two `statSync` calls per folder, nothing else |
+| GET | `/api/projects/:pid/jobs` | `{ today[], notStarted[], others[], unreadable[] }` for that one folder - the `.work` scan, on demand, no cache |
+| POST | `/api/projects/:pid/terminal` | opens a console on the **server's** desktop running `claude remote-control --spawn same-dir` |
 | GET | `/api/projects/:pid/jobs/:folder/md/:file` | one `.md` rendered to HTML |
 | POST | `/api/projects/:pid/jobs/:folder/resolve` | marks the job's workflow done **in its `progress.json`** |
 | GET | `/api/projects/:pid/sessions` | session summaries |
@@ -177,7 +237,7 @@ There is a hard 10-minute timeout per run. `-p` mode cannot answer an interactiv
 
 `:pid` is the encoded folder name, resolved back to a path from the config on every request - a path is never accepted from a URL, and an id that is not configured is a 404. Job folder and file segments are rejected if they still contain a separator after decoding, only `.md` is served, and the resolved path must stay under that project's `.work/`. JSON bodies are capped at 256 KB (413 past that).
 
-Only `PUT /api/config`, the two POST run routes, `/api/usage/refresh` and `/api/projects/:pid/jobs/:folder/resolve` change anything. Everything else is read-only.
+Only `PUT /api/config`, the two POST run routes, `/api/usage/refresh`, `/api/projects/:pid/terminal` and `/api/projects/:pid/jobs/:folder/resolve` change anything. Everything else is read-only.
 
 `resolve` is the single route that writes into a monitored folder - see below. Otherwise the only files Work Hub writes are `~/.work-hub/config.json` and whatever `claude` itself writes.
 
@@ -186,12 +246,12 @@ Only `PUT /api/config`, the two POST run routes, `/api/usage/refresh` and `/api/
 ## Tests
 
 ```powershell
-node --test *.test.mjs
+node --test test/*.test.mjs
 ```
 
 The glob form matters: `node --test .` fails on Node v26 with `Cannot find module`.
 
-95 tests cover grouping and the unknown-shape tolerance, the AC-count rule, the transcript folder encoding and session summaries, the chat parser's never-drop rule (including a fixture record type that does not exist), the argument builder and the run registry, config load/save/validation, the token gate, path safety, and the `/usage` parser. Nothing in the suite starts a real `claude` - every spawn is faked.
+122 tests cover grouping and the unknown-shape tolerance, the AC-count rule, the transcript folder encoding and session summaries, the chat parser's never-drop rule (including a fixture record type that does not exist), the argument builder and the run registry, config load/save/validation, the token gate, path safety, the split between the light dashboard and the on-demand job scan, the terminal launcher's argument list, and the `/usage` parser. Nothing in the suite starts a real `claude`, and no test opens a terminal window - every spawn is faked.
 
 `client.html` has no test runner pointed at it; it is checked by hand in a browser.
 

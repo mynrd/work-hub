@@ -12,10 +12,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { encodeProjectFolder, resolveTranscriptDir, listSessions, readSessionChat, clearSummaryCache } from './transcripts.mjs';
+import { encodeProjectFolder, resolveTranscriptDir, listSessions, readSessionChat, clearSummaryCache } from '../src/lib/transcripts.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SAMPLE = fs.readFileSync(path.join(__dirname, 'test-fixtures', 'transcripts', 'session-sample.jsonl'), 'utf8');
+const SAMPLE = fs.readFileSync(path.join(__dirname, 'fixtures', 'transcripts', 'session-sample.jsonl'), 'utf8');
 const SESSION_ID = '11111111-2222-3333-4444-555555555555';
 
 /**

@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { resolveWorkflow, isResolved, resolveJob, REQUIRED_STEPS } from './resolve-job.mjs';
+import { resolveWorkflow, isResolved, resolveJob, REQUIRED_STEPS } from '../src/lib/resolve-job.mjs';
 
 /** A job folder in a temp project, written with the exact bytes given. */
 function makeJob(raw, folder = 'a-job') {

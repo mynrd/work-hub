@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
-import { buildArgs, previewCommand, createRunRegistry } from './claude-run.mjs';
+import { buildArgs, previewCommand, createRunRegistry } from '../src/lib/claude-run.mjs';
 
 const VALID_SID = '0a690e2d-fb11-480b-b48a-ff6f44eff2e9';
 const OK = { model: 'claude-fable-5', effort: 'medium', permissionMode: 'default' };

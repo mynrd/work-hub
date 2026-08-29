@@ -8,11 +8,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseArgs, createServer } from './serve.mjs';
-import { loadConfig, saveConfig, configPath, encodeProjectId, resolveProjectId, validateProjectPath, normalizeConfig } from './config.mjs';
+import { parseArgs, createServer } from '../src/serve.mjs';
+import { loadConfig, saveConfig, configPath, encodeProjectId, resolveProjectId, validateProjectPath, normalizeConfig } from '../src/lib/config.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURES = path.join(__dirname, 'test-fixtures');
+const FIXTURES = path.join(__dirname, 'fixtures');
 const PROJ_A = path.join(FIXTURES, 'proj-a');
 
 // ── AC 1: arguments ──────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ test('AC 2: adding a path that does not exist is refused with the reason', () =>
   assert.equal(bad.ok, false);
   assert.match(bad.error, /does not exist/);
 
-  const file = validateProjectPath(path.join(__dirname, 'serve.mjs'));
+  const file = validateProjectPath(path.join(__dirname, '..', 'src', 'serve.mjs'));
   assert.equal(file.ok, false);
   assert.match(file.error, /is a file, not a folder/);
 
@@ -203,19 +203,51 @@ test('AC 2: PUT /api/config rejects a non-existent path with the reason and save
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('AC 4: GET /api/dashboard groups jobs across configured projects', async () => {
+test('AC 4: GET /api/dashboard lists the folders and scans nothing', async () => {
   const home = tempHome();
   saveConfig({ projects: [PROJ_A, path.join(FIXTURES, 'proj-empty')] }, home);
   await withServer({ home }, async (get) => {
     const model = await (await get('/api/dashboard')).json();
     assert.equal(model.projects.length, 2);
-    const all = model.today.concat(model.notStarted, model.others);
-    assert.ok(all.every((j) => typeof j.projectId === 'string'));
-    assert.ok(model.unreadable.length >= 1);
-    // AC 3: the folder with no .work/ is listed with zero jobs, not an error.
+    assert.ok(model.projects.every((p) => typeof p.id === 'string' && typeof p.name === 'string'));
+    // The expensive fields are gone on purpose: the dashboard must not walk
+    // .work/ or read a transcript for a folder nobody has opened.
+    assert.equal(model.today, undefined);
+    assert.equal(model.projects[0].jobCount, undefined);
+    assert.equal(model.projects[0].sessionCount, undefined);
+    // AC 3: the folder with no .work/ is still listed, not an error.
     const empty = model.projects.find((p) => p.path.endsWith('proj-empty'));
-    assert.equal(empty.jobCount, 0);
     assert.equal(empty.hasWorkDir, false);
+    assert.equal(empty.missing, false);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 4: GET /api/projects/:pid/jobs scans that one project on demand', async () => {
+  const home = tempHome();
+  saveConfig({ projects: [PROJ_A, path.join(FIXTURES, 'proj-empty')] }, home);
+  await withServer({ home }, async (get) => {
+    const pid = encodeProjectId(path.resolve(PROJ_A));
+    const model = await (await get(`/api/projects/${pid}/jobs`)).json();
+    const all = model.today.concat(model.notStarted, model.others);
+    assert.ok(all.length >= 1);
+    assert.ok(all.every((j) => j.projectId === pid && typeof j.projectName === 'string'));
+    assert.ok(model.unreadable.length >= 1);
+    assert.equal(model.hasWorkDir, true);
+
+    const emptyPid = encodeProjectId(path.resolve(path.join(FIXTURES, 'proj-empty')));
+    const emptyModel = await (await get(`/api/projects/${emptyPid}/jobs`)).json();
+    assert.deepEqual(emptyModel.today.concat(emptyModel.notStarted, emptyModel.others), []);
+    assert.equal(emptyModel.hasWorkDir, false);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 4: a jobs scan for an unconfigured project id is 404', async () => {
+  const home = tempHome();
+  saveConfig({ projects: [PROJ_A] }, home);
+  await withServer({ home }, async (get) => {
+    assert.equal((await get('/api/projects/D--not-configured/jobs')).status, 404);
   });
   fs.rmSync(home, { recursive: true, force: true });
 });

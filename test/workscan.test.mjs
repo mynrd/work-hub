@@ -1,5 +1,5 @@
 // AC 4, 5, 6: grouping given an injectable `now`, unknown-shape tolerance, and
-// the AC-count rule. Everything runs against test-fixtures/, so the mtimes that
+// the AC-count rule. Everything runs against test/fixtures/, so the mtimes that
 // decide "worked today" are set explicitly rather than left to whenever git
 // happened to check the files out.
 
@@ -10,10 +10,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { scanWorkFolder, groupFor, computeAcCounts, computeCurrentStep, localDay, listMarkdownFiles } from './workscan.mjs';
+import { scanWorkFolder, groupFor, computeAcCounts, computeCurrentStep, localDay, listMarkdownFiles } from '../src/lib/workscan.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURES = path.join(__dirname, 'test-fixtures');
+const FIXTURES = path.join(__dirname, 'fixtures');
 const PROJ_A = path.join(FIXTURES, 'proj-a');
 
 const NOW = new Date('2026-08-29T12:00:00').getTime();

@@ -15,13 +15,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-import { loadConfig, saveConfig, configPath, encodeProjectId, resolveProjectId, validateProjectPath, MODELS, EFFORTS, PERMISSION_MODES } from './config.mjs';
-import { scanWorkFolder } from './workscan.mjs';
-import { listSessions, readSessionChat, resolveTranscriptDir } from './transcripts.mjs';
-import { createUsageCache } from './usage.mjs';
-import { createRunRegistry } from './claude-run.mjs';
-import { resolveJob } from './resolve-job.mjs';
-import { renderMarkdown } from './markdown.mjs';
+import { loadConfig, saveConfig, configPath, encodeProjectId, resolveProjectId, validateProjectPath, MODELS, EFFORTS, PERMISSION_MODES } from './lib/config.mjs';
+import { scanWorkFolder } from './lib/workscan.mjs';
+import { listSessions, readSessionChat, resolveTranscriptDir } from './lib/transcripts.mjs';
+import { createUsageCache } from './lib/usage.mjs';
+import { createRunRegistry } from './lib/claude-run.mjs';
+import { resolveJob } from './lib/resolve-job.mjs';
+import { openTerminal } from './lib/terminal.mjs';
+import { renderMarkdown } from './lib/markdown.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -195,50 +196,58 @@ export function createServer({ token = null, home = undefined, runs = createRunR
   let config = loadConfig(...homeArgs);
   usage.setIntervalMinutes(config.usageIntervalMinutes);
 
-  /** The dashboard model: every configured project, scanned fresh. No cache. */
-  function buildDashboard(now = Date.now()) {
-    const projects = [];
-    const today = [];
-    const notStarted = [];
-    const others = [];
-    const unreadable = [];
-
-    for (const projectPath of config.projects) {
-      const pid = encodeProjectId(projectPath);
-      const scan = scanWorkFolder(projectPath, { now });
-      const transcriptDir = resolveTranscriptDir(projectPath, ...homeArgs);
-      const sessions = transcriptDir ? listSessions(projectPath, { ...(home === undefined ? {} : { home }), now }) : [];
-
-      const jobs = [...scan.today, ...scan.notStarted, ...scan.others];
-      const lastActivity = jobs.reduce((max, j) => Math.max(max, j.lastActivity || 0), 0);
-      const lastSession = sessions.reduce((max, s) => Math.max(max, s.lastWrite || 0), 0);
-
-      projects.push({
-        id: pid,
+  /**
+   * The dashboard model: the configured folders and nothing else.
+   *
+   * It deliberately does NOT scan `.work/` or list transcripts. Both walk the
+   * disk per project - `scanWorkFolder` recurses every job folder for its
+   * newest mtime - and the dashboard re-runs every 30 seconds, so with a dozen
+   * projects the page paid for every job and every session before showing a
+   * single box. The scan now happens once, for one project, when its box is
+   * clicked (`GET /api/projects/:pid/jobs`).
+   */
+  function buildDashboard() {
+    const projects = config.projects.map((projectPath) => {
+      let missing = false;
+      let hasWorkDir = false;
+      try {
+        missing = !fs.statSync(projectPath).isDirectory();
+      } catch {
+        missing = true;
+      }
+      if (!missing) {
+        try { hasWorkDir = fs.statSync(path.join(projectPath, '.work')).isDirectory(); }
+        catch { hasWorkDir = false; }
+      }
+      return {
+        id: encodeProjectId(projectPath),
         path: projectPath,
         name: path.basename(projectPath) || projectPath,
-        missing: scan.missing,
-        hasWorkDir: scan.hasWorkDir,
-        jobCount: jobs.length,
-        unreadableCount: scan.unreadable.length,
-        sessionCount: sessions.length,
-        liveSessions: sessions.filter((s) => s.live).length,
-        lastActivity: Math.max(lastActivity, lastSession),
-      });
+        missing,
+        hasWorkDir,
+      };
+    });
 
-      const tag = (job) => ({ ...job, projectId: pid, projectName: path.basename(projectPath) || projectPath });
-      today.push(...scan.today.map(tag));
-      notStarted.push(...scan.notStarted.map(tag));
-      others.push(...scan.others.map(tag));
-      unreadable.push(...scan.unreadable.map((u) => ({ ...u, projectId: pid, projectName: path.basename(projectPath) || projectPath })));
-    }
+    return { projects, configPath: configPath(...homeArgs), loadError: config.loadError ?? null };
+  }
 
-    const byActivity = (a, b) => (b.lastActivity || 0) - (a.lastActivity || 0);
-    today.sort(byActivity);
-    notStarted.sort(byActivity);
-    others.sort(byActivity);
+  /** One project's jobs, scanned on demand. This is the expensive call. */
+  function buildProjectJobs(projectPath, pid, now = Date.now()) {
+    const scan = scanWorkFolder(projectPath, { now });
+    const projectName = path.basename(projectPath) || projectPath;
+    const tag = (job) => ({ ...job, projectId: pid, projectName });
 
-    return { projects, today, notStarted, others, unreadable, configPath: configPath(...homeArgs), loadError: config.loadError ?? null };
+    return {
+      projectId: pid,
+      projectPath,
+      name: projectName,
+      missing: scan.missing,
+      hasWorkDir: scan.hasWorkDir,
+      today: scan.today.map(tag),
+      notStarted: scan.notStarted.map(tag),
+      others: scan.others.map(tag),
+      unreadable: scan.unreadable.map((u) => ({ ...u, projectId: pid, projectName })),
+    };
   }
 
   async function handleConfigPut(req, res) {
@@ -374,6 +383,24 @@ export function createServer({ token = null, home = undefined, runs = createRunR
       // A project id that is not in the config is a 404 - a path is never
       // accepted from the URL, only an id that already resolves.
       if (!projectPath) { sendJson(res, 404, { error: 'No such project' }); return; }
+
+      // /api/projects/:pid/jobs - the on-demand .work scan for one project
+      if (parts[1] === 'jobs' && parts.length === 2 && req.method === 'GET') {
+        try {
+          sendJson(res, 200, buildProjectJobs(projectPath, pid));
+        } catch (err) {
+          sendJson(res, 500, { error: `Scan failed: ${err.message}` });
+        }
+        return;
+      }
+
+      // /api/projects/:pid/terminal - opens a console on the server's desktop
+      if (parts[1] === 'terminal' && parts.length === 2 && req.method === 'POST') {
+        const result = openTerminal(projectPath);
+        if (!result.ok) { sendJson(res, result.status, { error: result.error }); return; }
+        sendJson(res, 200, result);
+        return;
+      }
 
       // /api/projects/:pid/jobs/:folder/md/:file
       if (parts[1] === 'jobs' && parts[3] === 'md' && parts.length === 5 && req.method === 'GET') {

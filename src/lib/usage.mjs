@@ -17,6 +17,24 @@
 // unchanged.
 
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+/**
+ * `claude -p /usage` is a real Claude Code session: it writes a transcript into
+ * `~/.claude/projects/<encoded cwd>/`. Running it from a monitored project would
+ * drop a one-turn `/usage` session into that project's Conversations list every
+ * few minutes, so it runs from `~/.claude` instead and the transcripts pile up
+ * there, out of the way. Falls back to the home folder if `.claude` is missing.
+ */
+export function usageCwd(home = os.homedir()) {
+  const dir = path.join(home, '.claude');
+  try {
+    if (fs.statSync(dir).isDirectory()) return dir;
+  } catch { /* not there - fall through */ }
+  return home;
+}
 
 // `<label>: N% used · resets <when>`  (· is U+00B7; the reset clause is optional)
 const LIMIT_RE = /^(.+?):\s*(\d+)%\s*used(?:\s*·\s*resets\s*(.+))?$/i;
@@ -42,14 +60,14 @@ export function parseUsage(text) {
  * failure (claude not on PATH, not signed in, timeout) comes back as `ok: false`
  * with the captured message so the card can show it instead of throwing.
  */
-export function fetchCliUsage({ timeoutMs = 30000 } = {}) {
+export function fetchCliUsage({ timeoutMs = 30000, cwd = usageCwd() } = {}) {
   return new Promise((resolve) => {
     let child;
     try {
       // Single command string + shell:true so Windows resolves claude.cmd. Nothing
       // here is user input, so the shell has nothing to interpolate. stdin 'ignore'
       // gives an immediate EOF instead of an interactive wait.
-      child = spawn('claude -p /usage', { stdio: ['ignore', 'pipe', 'pipe'], shell: true, windowsHide: true });
+      child = spawn('claude -p /usage', { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: true, windowsHide: true });
     } catch (e) {
       resolve({ ok: false, error: e.message, fetchedAt: Date.now() });
       return;

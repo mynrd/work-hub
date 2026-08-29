@@ -1,17 +1,18 @@
 // AC 7: the /usage parser. The spawn itself is not exercised here - that needs a
-// signed-in claude on PATH - so the samples under test-fixtures/usage/ stand in
+// signed-in claude on PATH - so the samples under test/fixtures/usage/ stand in
 // for its stdout.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseUsage } from './usage.mjs';
+import { parseUsage, usageCwd } from '../src/lib/usage.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const sample = (name) => fs.readFileSync(path.join(__dirname, 'test-fixtures', 'usage', name), 'utf8');
+const sample = (name) => fs.readFileSync(path.join(__dirname, 'fixtures', 'usage', name), 'utf8');
 
 test('AC 7: every "<label>: N% used · resets <when>" line is parsed', () => {
   const { plan, limits } = parseUsage(sample('pro.txt'));
@@ -42,6 +43,14 @@ test('AC 7: output with no limit lines yields no limits', () => {
 test('AC 7: an API-credit plan sentence is picked up too', () => {
   const { plan } = parseUsage('You are using API credits\n\nCurrent session: 1% used');
   assert.equal(plan, 'You are using API credits');
+});
+
+test("AC 7: /usage runs from ~/.claude so its transcripts do not land in a monitored project", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-usage-home-'));
+  assert.equal(usageCwd(home), home, 'with no .claude folder it falls back to the home folder');
+  fs.mkdirSync(path.join(home, '.claude'));
+  assert.equal(usageCwd(home), path.join(home, '.claude'));
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test('AC 7: empty, null and undefined input do not throw', () => {
