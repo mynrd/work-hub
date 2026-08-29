@@ -1,0 +1,2 @@
+# Transcript fixtures are parsed line by line; keep them byte-identical across platforms.
+*.jsonl -text
