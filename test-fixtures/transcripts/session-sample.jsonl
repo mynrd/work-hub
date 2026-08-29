@@ -1,0 +1,13 @@
+{"type":"ai-title","aiTitle":"Fixture session title","timestamp":"2026-08-29T01:00:00.000Z","sessionId":"11111111-2222-3333-4444-555555555555","cwd":"D:\\Fixture\\Proj","gitBranch":"main","version":"2.1.226"}
+{"type":"user","isMeta":true,"message":{"role":"user","content":"<system-reminder>meta noise</system-reminder>"},"timestamp":"2026-08-29T01:00:01.000Z"}
+{"type":"user","message":{"role":"user","content":"First real prompt from the human"},"timestamp":"2026-08-29T01:00:02.000Z"}
+{"type":"assistant","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"thinking","thinking":"Let me consider this."},{"type":"text","text":"Here is the answer."},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls -la"}}]},"timestamp":"2026-08-29T01:00:03.000Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"total 0\ndrwxr-xr-x 1 x x 0 Aug 29 01:00 ."}]},"timestamp":"2026-08-29T01:00:04.000Z"}
+{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name><command-message>clear</command-message><command-args></command-args>"},"timestamp":"2026-08-29T01:00:05.000Z"}
+{"type":"user","message":{"role":"user","content":"<ide_opened_file>The user opened the file D:\\Fixture\\Proj\\a.ts in the IDE. This may or may not be related to the current task.</ide_opened_file>"},"timestamp":"2026-08-29T01:00:06.000Z"}
+{"type":"attachment","attachment":{"type":"file","displayPath":"src/index.ts","content":"{\"file\":{\"numLines\":42}}"},"timestamp":"2026-08-29T01:00:07.000Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","compactMetadata":{"trigger":"auto","preTokens":120000,"postTokens":30000},"timestamp":"2026-08-29T01:00:08.000Z"}
+{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"Summary of the previous conversation."},"timestamp":"2026-08-29T01:00:09.000Z"}
+{"type":"assistant","isSidechain":true,"message":{"role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"Subagent turn spliced in - must not count as a message."}]},"timestamp":"2026-08-29T01:00:10.000Z"}
+{"type":"a-record-type-that-did-not-exist-when-this-was-written","payload":{"anything":true},"timestamp":"2026-08-29T01:00:11.000Z"}
+{"type":"assistant","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"Final word."},{"type":"a_block_type_from_the_future","data":42}]},"timestamp":"2026-08-29T01:00:12.000Z"}
