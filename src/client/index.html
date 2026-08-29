@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<title>Work Hub</title>
+<link rel="stylesheet" href="/styles/tokens.css" />
+<link rel="stylesheet" href="/styles/layout.css" />
+<link rel="stylesheet" href="/styles/components.css" />
+<link rel="stylesheet" href="/styles/views.css" />
+<!-- Last: every breakpoint in the app overrides the four files above. -->
+<link rel="stylesheet" href="/styles/responsive.css" />
+<script>
+  /* Inline, and before the stylesheets have a chance to paint, so the stored
+     theme is on <html> from the very first frame and there is no flash. */
+  try {
+    var storedTheme = localStorage.getItem('work-hub-theme');
+    document.documentElement.setAttribute('data-theme', storedTheme || 'dark');
+  } catch (e) { /* storage blocked - stay on the dark default in the markup */ }
+</script>
+<script type="module" src="/js/main.mjs"></script>
+</head>
+<body>
+
+<!-- Icon sprite. Inlined into index.html at the top of <body> so every
+     <use href="#i-…"> in the generated markup resolves without a fetch. -->
+<svg style="display:none" aria-hidden="true" focusable="false">
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-maximize" viewBox="0 0 24 24"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" x2="14" y1="3" y2="10"/><line x1="3" x2="10" y1="21" y2="14"/></symbol>
+  <symbol id="i-minimize" viewBox="0 0 24 24"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" x2="21" y1="10" y2="3"/><line x1="3" x2="10" y1="21" y2="14"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+</svg>
+
+
+<header class="topbar">
+  <a class="brand" href="#/">
+    <div class="brand-mark">WH</div>
+    <div class="brand-text"><strong>Work Hub</strong><span>Projects, jobs, conversations</span></div>
+  </a>
+  <div class="topbar__spacer"></div>
+  <div class="search">
+    <svg class="icon"><use href="#i-search"/></svg>
+    <input type="search" id="searchInput" placeholder="Search project, folder, title, status…" aria-label="Search jobs" />
+    <kbd>/</kbd>
+  </div>
+  <div class="divider-v"></div>
+  <!-- .btn__label is what the phone breakpoint hides to leave an icon-only button. -->
+  <a class="btn btn-secondary" href="#/" title="Dashboard"><svg class="icon"><use href="#i-home"/></svg> <span class="btn__label">Dashboard</span></a>
+  <a class="btn btn-secondary" href="#/settings" title="Settings"><svg class="icon"><use href="#i-settings"/></svg> <span class="btn__label">Settings</span></a>
+  <button type="button" class="btn btn-secondary" id="refreshBtn" title="Refresh"><svg class="icon"><use href="#i-refresh"/></svg> <span class="btn__label">Refresh</span></button>
+  <button type="button" class="icon-btn" id="themeToggleBtn" aria-label="Toggle colour theme">
+    <svg class="icon"><use href="#i-sun" id="themeIconUse"/></svg>
+  </button>
+</header>
+
+<main class="content" id="app"></main>
+
+<!-- Job detail dialog. The shell is static markup; js/components/detail-dialog.mjs
+     fills each region when a job row is opened. -->
+<div class="overlay" id="detailOverlay" role="dialog" aria-modal="true" aria-labelledby="detailTitleId">
+  <div class="modal">
+    <div class="modal__head">
+      <div>
+        <h3><span class="mono" id="detailIdLabel"></span><span id="detailTitleId"></span><span id="detailStatusBadge"></span></h3>
+        <p id="detailSubline"></p>
+      </div>
+      <div class="row gap-2">
+        <button type="button" class="btn btn-secondary btn-sm" id="detailResolveBtn" title="Mark every workflow step done in this job's progress.json">
+          <svg class="icon icon-sm"><use href="#i-check"/></svg> <span id="detailResolveLabel">Resolve</span>
+        </button>
+        <button type="button" class="icon-btn" id="detailFullscreenBtn" aria-pressed="false" aria-label="Maximise" title="Maximise">
+          <svg class="icon"><use href="#i-maximize" id="fullscreenIconUse"/></svg>
+        </button>
+        <button type="button" class="icon-btn" id="detailCloseBtn" aria-label="Close" title="Close">
+          <svg class="icon"><use href="#i-x"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="modal__body">
+      <div class="modal__fixed">
+        <div class="modal__fixed-inner col gap-3">
+          <div class="kv kv--inline" id="detailMeta"></div>
+          <div>
+            <div class="fs-xs muted mb-2">Workflow</div>
+            <div id="detailWorkflow"></div>
+          </div>
+        </div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Job detail sections" id="detailTabs"></div>
+      <div class="modal__panels" id="detailPanels">
+        <div class="tabpanel col gap-5" id="panel-ac" role="tabpanel" aria-labelledby="tab-ac"><div class="card"><div class="card__body" id="detailAc"></div></div></div>
+        <div class="tabpanel col gap-5" id="panel-intake" role="tabpanel" aria-labelledby="tab-intake" hidden><div id="detailIntake"></div></div>
+        <div class="tabpanel" id="panel-tasks" role="tabpanel" aria-labelledby="tab-tasks" hidden><div class="card"><div class="card__body" id="detailTasks"></div></div></div>
+        <div class="tabpanel" id="panel-tests" role="tabpanel" aria-labelledby="tab-tests" hidden><div class="card"><div class="card__body col gap-5" id="detailTests"></div></div></div>
+        <div class="tabpanel" id="panel-runs" role="tabpanel" aria-labelledby="tab-runs" hidden><div class="card"><div class="card__body" id="detailRuns"></div></div></div>
+        <div class="tabpanel" id="panel-docs" role="tabpanel" aria-labelledby="tab-docs" hidden>
+          <div class="card"><div class="card__body">
+            <div class="row wrap gap-2 mb-4" id="mdTabs"></div>
+            <div class="prose" id="mdContent"></div>
+          </div></div>
+        </div>
+        <div class="tabpanel" id="panel-raw" role="tabpanel" aria-labelledby="tab-raw" hidden>
+          <div class="card"><div class="card__body"><div class="code-block">
+            <pre id="detailRaw"></pre>
+            <button type="button" class="icon-btn code-block__copy" id="detailRawCopyBtn" aria-label="Copy raw progress.json" title="Copy">
+              <svg class="icon icon-sm"><use href="#i-copy" id="detailRawCopyIconUse"/></svg>
+            </button>
+          </div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- One-time code prompt (only ever shown after a 401) -->
+<div class="overlay" id="otpOverlay" role="dialog" aria-modal="true" aria-labelledby="otpTitle">
+  <div class="modal modal--sm">
+    <div class="modal__head"><div><h3 id="otpTitle">Enter your code</h3><p>Open your authenticator and type the 6 digit code it shows for Work Hub. A correct code signs this browser in for 12 hours.</p></div></div>
+    <div class="modal__body">
+      <input class="input" id="otpInput" type="text" inputmode="numeric" autocomplete="one-time-code"
+             maxlength="6" placeholder="000000" aria-describedby="otpError"
+             style="width:100%; font-family: var(--font-mono); font-size: 22px; letter-spacing: .4em; text-align: center" />
+      <p id="otpError" class="term-status is-error" style="padding:0; min-height:1.2em" role="alert"></p>
+      <div class="row gap-2"><button type="button" class="btn btn-primary" id="otpSubmitBtn">Sign in</button></div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

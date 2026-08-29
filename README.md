@@ -146,7 +146,16 @@ src/enroll.mjs           terminal app: prints the QR, confirms a code, writes th
 src/lib/totp.mjs         RFC 4226/6238 TOTP, base32, the otpauth:// URI
 src/lib/qr.mjs           QR encoder (byte mode, level M, versions 1-10) and the terminal render
 src/lib/authstore.mjs    ~/.work-hub/totp.json, and the in-memory session tokens
-src/client.html          the whole UI - markup, CSS and JS inline, no build step
+src/client/index.html    the page shell: icon sprite, topbar, the two dialogs. Markup only
+src/client/styles/       tokens.css, layout.css, components.css, views.css, responsive.css
+src/client/js/           ES modules, loaded by the browser directly - no build step
+  main.mjs               entry point: theme, topbar, router
+  api.mjs                fetch + the 401 -> code prompt -> replay loop
+  data.mjs               every server read/write, and the state it lands in
+  state.mjs              the store; render.mjs the view registry; router.mjs the hash routes
+  dom.mjs                esc/format helpers and the stock card fragments
+  views/                 dashboard, settings, project, conversation
+  components/            job-table, sessions-card, chat, composer, usage-card, detail-dialog
 
 src/lib/config.mjs       ~/.work-hub/config.json, path validation, the model/effort/permission allowlists
 src/lib/workscan.mjs     scanWorkFolder(projectPath, {now}) -> { today, notStarted, others, unreadable }
@@ -159,6 +168,9 @@ src/lib/markdown.mjs     the Docs tab renderer (copied verbatim from work-viewer
 
 test/*.test.mjs          node --test
 test/fixtures/           .work trees, a transcript, /usage samples
+
+e2e/                     Playwright UI suite. The only package.json in the repo - the app
+                         itself still has no dependency and no build step. See e2e/README.md
 ```
 
 ### What loads when
@@ -259,7 +271,8 @@ Work Hub launches it and forgets it: no run is registered, no output is captured
 
 | Method | Route | Returns |
 |---|---|---|
-| GET | `/` | `client.html` - always served, gate or no gate, so the code can be typed |
+| GET | `/` | `src/client/index.html` - always served, gate or no gate, so the code can be typed |
+| GET | `/styles/*.css`, `/js/**/*.mjs` | the page's own assets, from `src/client/` only. Ungated for the same reason as `/` |
 | GET | `/api/auth/status` | `{ required, authenticated, digits, periodSeconds }` - ungated |
 | POST | `/api/auth/otp` | `{ token, expiresAt }` for a live 6 digit code; 401 wrong or replayed, 429 locked out. Ungated - it is the way in |
 | GET / PUT | `/api/config` | the config; PUT validates every path with `statSync().isDirectory()` |
@@ -276,7 +289,7 @@ Work Hub launches it and forgets it: no run is registered, no output is captured
 | GET | `/api/usage` | the cached `/usage` result |
 | POST | `/api/usage/refresh` | forces a fetch |
 
-`:pid` is the encoded folder name, resolved back to a path from the config on every request - a path is never accepted from a URL, and an id that is not configured is a 404. Job folder and file segments are rejected if they still contain a separator after decoding, only `.md` is served, and the resolved path must stay under that project's `.work/`. JSON bodies are capped at 256 KB (413 past that).
+`:pid` is the encoded folder name, resolved back to a path from the config on every request - a path is never accepted from a URL, and an id that is not configured is a 404. Job folder and file segments are rejected if they still contain a separator after decoding, only `.md` is served, and the resolved path must stay under that project's `.work/`. JSON bodies are capped at 256 KB (413 past that). Static requests are resolved against `src/client/` and then checked as a resolved path - a percent-encoded `..` that normalises outside the folder is a 404, not a read - and an extension the server has no content type for is never served at all.
 
 Only `PUT /api/config`, the two POST run routes, `/api/usage/refresh`, `/api/projects/:pid/terminal` and `/api/projects/:pid/jobs/:folder/resolve` change anything. Everything else is read-only.
 
@@ -286,15 +299,41 @@ Only `PUT /api/config`, the two POST run routes, `/api/usage/refresh`, `/api/pro
 
 ## Tests
 
+### Node
+
 ```powershell
 node --test test/*.test.mjs
 ```
 
 The glob form matters: `node --test .` fails on Node v26 with `Cannot find module`.
 
-158 tests cover grouping and the unknown-shape tolerance, the AC-count rule, the transcript folder encoding and session summaries, the chat parser's never-drop rule (including a fixture record type that does not exist), the argument builder and the run registry, config load/save/validation, the code exchange (against the RFC 4226 and RFC 6238 published vectors) with its replay guard and lockout, the QR encoder (its codewords, error correction included, checked against vectors captured from an independent implementation, plus a round trip through a decoder written from the spec geometry rather than from the encoder), session issue and expiry, path safety, the split between the light dashboard and the on-demand job scan, the terminal launcher's argument list, and the `/usage` parser. Nothing in the suite starts a real `claude`, and no test opens a terminal window - every spawn is faked.
+165 tests cover grouping and the unknown-shape tolerance, the AC-count rule, the transcript folder encoding and session summaries, the chat parser's never-drop rule (including a fixture record type that does not exist), the argument builder and the run registry, config load/save/validation, the code exchange (against the RFC 4226 and RFC 6238 published vectors) with its replay guard and lockout, the QR encoder (its codewords, error correction included, checked against vectors captured from an independent implementation, plus a round trip through a decoder written from the spec geometry rather than from the encoder), session issue and expiry, path safety, the split between the light dashboard and the on-demand job scan, the terminal launcher's argument list, and the `/usage` parser. Nothing in the suite starts a real `claude`, and no test opens a terminal window - every spawn is faked.
 
-`client.html` has no test runner pointed at it; it is checked by hand in a browser.
+The server side of the client is covered here too: content types, and that a
+percent-encoded `..` cannot reach a file outside `src/client/`.
+
+### UI
+
+```powershell
+cd e2e
+npm install                      # once
+npx playwright install chromium  # once
+npm test
+```
+
+141 Playwright tests drive the real server in a real browser, at 1440x900 and at
+a Pixel 5, and assert both. They cover the boot path (every asset served, every
+route rendered, no console error), the dashboard, the job tables and the job
+dialog, the transcript renderer, the composer, Settings, the one-time-code gate,
+and every breakpoint claim in `src/client/styles/responsive.css`.
+
+The suite builds its own throwaway HOME under the temp folder, so your real
+`~/.work-hub` and `~/.claude` are never touched. `claude /usage` and `claude -p`
+are both stubbed, so no `claude` process ever starts, and no spec clicks the
+Terminal button. `e2e/README.md` has the details.
+
+`e2e/` is the only folder in the repo with a `package.json`. Nothing under `src/`
+imports from it - the app still runs on node built-ins alone.
 
 ---
 

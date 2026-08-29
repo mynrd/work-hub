@@ -161,6 +161,46 @@ test('AC 1: GET / serves the dashboard page', async () => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('AC 1: the page assets are served with the right content type', async () => {
+  const home = tempHome();
+  await withServer({ home }, async (get) => {
+    for (const [path_, type, marker] of [
+      ['/styles/tokens.css', /text\/css/, '--accent-500'],
+      ['/styles/responsive.css', /text\/css/, '@media'],
+      ['/js/main.mjs', /text\/javascript/, 'initRouter'],
+      ['/js/components/detail-dialog.mjs', /text\/javascript/, 'openDetail'],
+    ]) {
+      const res = await get(path_);
+      assert.equal(res.status, 200, path_);
+      assert.match(res.headers.get('content-type'), type, path_);
+      assert.ok((await res.text()).includes(marker), `${path_} is missing ${marker}`);
+    }
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 1: the static root cannot be escaped, and only known extensions are served', async () => {
+  const home = tempHome();
+  await withServer({ home }, async (get) => {
+    // fetch() normalises a literal `..` out of the path before it leaves, so
+    // the escape attempts that matter are the percent-encoded ones - which is
+    // exactly the form the resolved-prefix check exists to catch.
+    for (const path_ of [
+      '/js/%2e%2e/serve.mjs',
+      '/js/%2e%2e/%2e%2e/serve.mjs',
+      '/styles/%2e%2e/%2e%2e/lib/config.mjs',
+      '/%2e%2e/package.json',
+      '/js/%2e%2e/client/index.html%00.css',
+      '/js',                 // a directory, not a file
+      '/js/nope.mjs',        // inside the root, does not exist
+      '/serve.mjs',          // a real file, but not under src/client
+    ]) {
+      assert.equal((await get(path_)).status, 404, path_);
+    }
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 // A code is only live for 30 seconds, so these tests mint their own secret and
 // read the current code off it rather than hard-coding digits.
 function postCode(get, code) {
@@ -175,6 +215,10 @@ test('AC 14: with a secret enrolled, /api/* without a session is 401 but GET / s
   const home = tempHome();
   await withServer({ home, otpSecret: generateSecret() }, async (get) => {
     assert.equal((await get('/')).status, 200);
+    // The prompt for the code is part of the page, so the page and everything
+    // it pulls in have to load before a code can be entered.
+    assert.equal((await get('/styles/tokens.css')).status, 200);
+    assert.equal((await get('/js/main.mjs')).status, 200);
     assert.equal((await get('/api/config')).status, 401);
     assert.equal((await get('/api/dashboard')).status, 401);
     assert.equal((await get('/api/config', { headers: { 'X-Hub-Token': 'not-a-session' } })).status, 401);

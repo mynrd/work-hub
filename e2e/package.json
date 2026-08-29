@@ -1,0 +1,17 @@
+{
+  "name": "work-hub-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Playwright UI suite for Work Hub. Deliberately separate from the app, which has no package.json and no runtime dependency.",
+  "scripts": {
+    "test": "playwright test",
+    "test:desktop": "playwright test --project=desktop",
+    "test:mobile": "playwright test --project=mobile",
+    "ui": "playwright test --ui",
+    "report": "playwright show-report",
+    "serve": "node support/start-server.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}

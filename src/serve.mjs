@@ -179,6 +179,41 @@ function decodeSegment(raw) {
   return value;
 }
 
+// ── Static client ────────────────────────────────────────────────────────────
+
+// An extension not in here is not servable, whatever it resolves to. That is
+// what keeps `src/client/` from turning into "serve any file the process can
+// open" if a stray file ever lands in the folder.
+const STATIC_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+};
+
+/**
+ * Maps a request path to a file under `root`, or null when it does not name one.
+ *
+ * The guard is the resolved-prefix check, not a scan for `..` in the string:
+ * `/js/%2e%2e/%2e%2e/lib/config.mjs` decodes and normalises to a path outside
+ * `root`, and that resolved path is what gets rejected. A NUL is refused up
+ * front because `fs` throws on it, and that throw would surface as a 500.
+ */
+function resolveStaticFile(root, pathname) {
+  let decoded;
+  try { decoded = decodeURIComponent(pathname); } catch { return null; }
+  if (decoded.includes('\0')) return null;
+
+  const full = path.resolve(root, decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, ''));
+  if (full !== root && !full.startsWith(root + path.sep)) return null;
+  if (!Object.prototype.hasOwnProperty.call(STATIC_TYPES, path.extname(full).toLowerCase())) return null;
+  return full;
+}
+
 /**
  * Renders one `.md` file from a job folder. Only `.md` is served, and the
  * resolved path must stay under that project's `.work/`.
@@ -234,7 +269,7 @@ export function createServer({
   usage = createUsageCache(),
   sessions = createSessionStore(),
 } = {}) {
-  const clientHtmlPath = path.join(__dirname, 'client.html');
+  const clientRoot = path.resolve(__dirname, 'client');
   const homeArgs = home === undefined ? [] : [home];
   const otpGuard = createOtpGuard();
 
@@ -436,12 +471,29 @@ export function createServer({
       return;
     }
 
-    if (pathname === '/' && req.method === 'GET') {
-      let html;
-      try { html = fs.readFileSync(clientHtmlPath, 'utf8'); }
-      catch (err) { sendJson(res, 500, { error: `Cannot read client.html: ${err.message}` }); return; }
-      sendText(res, 200, html, 'text/html; charset=utf-8');
-      return;
+    // The page and everything it pulls in - stylesheets, ES modules - is served
+    // ungated, exactly as the single client.html was: the prompt for the code
+    // is part of that page, so it has to load before a code can be entered.
+    if (req.method === 'GET' && !pathname.startsWith('/api/')) {
+      const file = resolveStaticFile(clientRoot, pathname);
+      if (file) {
+        let body;
+        try { body = fs.readFileSync(file); }
+        catch (err) {
+          if (err.code === 'ENOENT' || err.code === 'EISDIR') { sendJson(res, 404, { error: 'Not found' }); return; }
+          sendJson(res, 500, { error: `Cannot read ${path.relative(clientRoot, file)}: ${err.message}` });
+          return;
+        }
+        res.writeHead(200, {
+          'Content-Type': STATIC_TYPES[path.extname(file).toLowerCase()],
+          'Content-Length': body.length,
+          // Read off disk per request. An edit has to show up on the next
+          // reload, not after a hard refresh.
+          'Cache-Control': 'no-cache',
+        });
+        res.end(body);
+        return;
+      }
     }
 
     if (pathname === '/api/config') {

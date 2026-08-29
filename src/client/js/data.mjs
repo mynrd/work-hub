@@ -1,0 +1,73 @@
+// Every server read/write, and the state it lands in. These all resolve rather
+// than reject: a failed load parks its message in state and the view draws it.
+
+import { api } from './api.mjs';
+import { state } from './state.mjs';
+
+export function loadConfig() {
+  return api('/api/config').then(function (c) { state.config = c; return c; });
+}
+
+export function saveConfig(patch) {
+  var next = {
+    projects: patch.projects !== undefined ? patch.projects : state.config.projects,
+    usageIntervalMinutes: patch.usageIntervalMinutes !== undefined ? patch.usageIntervalMinutes : state.config.usageIntervalMinutes,
+    defaults: patch.defaults !== undefined ? patch.defaults : state.config.defaults,
+  };
+  return api('/api/config', { method: 'PUT', body: JSON.stringify(next) })
+    .then(function (saved) {
+      state.config = Object.assign({}, state.config, saved);
+      return state.config;
+    });
+}
+
+export function loadUsage() {
+  return api('/api/usage').then(function (u) { state.usage = u; }).catch(function (err) {
+    state.usage = { ok: false, error: err.message, fetchedAt: 0 };
+  });
+}
+
+export function loadDashboard() {
+  return api('/api/dashboard').then(function (d) { state.dashboard = d; }).catch(function (err) {
+    state.error = err.message;
+  });
+}
+
+export function loadJobs(pid) {
+  return api('/api/projects/' + encodeURIComponent(pid) + '/jobs')
+    .then(function (data) { state.jobs[pid] = data; })
+    .catch(function (err) { state.error = err.message; });
+}
+
+export function loadSessions(pid) {
+  return api('/api/projects/' + encodeURIComponent(pid) + '/sessions')
+    .then(function (data) { state.sessions[pid] = data; })
+    .catch(function (err) { state.error = err.message; });
+}
+
+export function loadChat(pid, sid) {
+  if (sid === 'new') { state.chat = { sessionId: 'new', messages: [] }; return Promise.resolve(); }
+  return api('/api/projects/' + encodeURIComponent(pid) + '/sessions/' + encodeURIComponent(sid))
+    .then(function (chat) { state.chat = chat; })
+    .catch(function (err) { state.chat = null; state.error = err.message; });
+}
+
+// ---- Lookups over what is already loaded ------------------------------------
+
+export function findJob(pid, folder) {
+  var j = state.jobs[pid];
+  if (!j) return null;
+  var all = j.today.concat(j.notStarted, j.others);
+  for (var i = 0; i < all.length; i++) {
+    if (all[i].folder === folder) return all[i];
+  }
+  return null;
+}
+
+export function projectOf(pid) {
+  if (!state.dashboard) return null;
+  for (var i = 0; i < state.dashboard.projects.length; i++) {
+    if (state.dashboard.projects[i].id === pid) return state.dashboard.projects[i];
+  }
+  return null;
+}

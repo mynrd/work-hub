@@ -1,0 +1,104 @@
+/* Design tokens, theme, reset, base elements. Everything else builds on this.
+
+   The token block is carried over from scripts/work-viewer/client.html so this
+   tool reads as the same design language. */
+
+:root {
+  --accent-50:  #eef0ff;
+  --accent-100: #e0e3ff;
+  --accent-300: #a3a9ff;
+  --accent-400: #7c7cf8;
+  --accent-500: #6258ef;
+  --accent-600: #5440e0;
+  --accent-700: #4733bd;
+
+  --success: #16a34a; --success-bg: #e7f6ec; --success-fg: #137a39;
+  --warning: #d97706; --warning-bg: #fdf1df; --warning-fg: #a85a06;
+  --danger:  #dc2626; --danger-bg:  #fde8e8; --danger-fg:  #b91c1c;
+  --info:    #2563eb; --info-bg:    #e6effe; --info-fg:    #1d4ed8;
+
+  --bg:        #f6f7fb;
+  --surface:   #ffffff;
+  --surface-2: #fbfbfd;
+  --surface-3: #f2f3f8;
+  --fg:        #1a1c24;
+  --fg-muted:  #5b6072;
+  --fg-subtle: #8a90a2;
+  --border:    #e7e8ef;
+  --border-strong: #d6d8e2;
+  --ring: rgba(98, 88, 239, .35);
+
+  --r-sm: 8px; --r-md: 11px; --r-lg: 14px; --r-xl: 20px; --r-pill: 999px;
+
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px;
+  --s-5: 20px; --s-6: 24px; --s-7: 32px; --s-8: 40px; --s-9: 56px;
+
+  --shadow-xs: 0 1px 2px rgba(20, 22, 40, .05);
+  --shadow-sm: 0 1px 3px rgba(20, 22, 40, .06), 0 1px 2px rgba(20, 22, 40, .04);
+  --shadow-md: 0 4px 12px rgba(20, 22, 40, .08), 0 2px 4px rgba(20, 22, 40, .04);
+  --shadow-lg: 0 12px 32px rgba(20, 22, 40, .12), 0 4px 8px rgba(20, 22, 40, .06);
+  --shadow-xl: 0 24px 60px rgba(20, 22, 40, .18);
+
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+  --fs-xs: 13px; --fs-sm: 14px; --fs-base: 15px; --fs-md: 16px;
+  --fs-lg: 19px; --fs-xl: 23px; --fs-2xl: 29px;
+
+  --ease: cubic-bezier(.4, 0, .2, 1);
+  --t-fast: 140ms; --t: 200ms;
+
+  --topbar-h: 66px;
+}
+
+[data-theme="dark"] {
+  --bg:        #0e0f17;
+  --surface:   #181a25;
+  --surface-2: #1e202d;
+  --surface-3: #242736;
+  --fg:        #e9eaf0;
+  --fg-muted:  #9aa0b4;
+  --fg-subtle: #6b7186;
+  --border:    #282b3a;
+  --border-strong: #353949;
+  --ring: rgba(124, 124, 248, .45);
+
+  --accent-500: #7c7cf8;
+  --accent-600: #6a64f0;
+
+  --success-bg: #11301d; --success-fg: #5fd98a;
+  --warning-bg: #34250f; --warning-fg: #f2b766;
+  --danger-bg:  #381618; --danger-fg:  #f08a8a;
+  --info-bg:    #11233f; --info-fg:    #7eb0fb;
+
+  --shadow-xs: 0 1px 2px rgba(0,0,0,.4);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,.45);
+  --shadow-md: 0 4px 14px rgba(0,0,0,.5);
+  --shadow-lg: 0 14px 40px rgba(0,0,0,.55);
+  --shadow-xl: 0 28px 70px rgba(0,0,0,.65);
+}
+
+/* ---------- Reset / base ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; }
+body {
+  font-family: var(--font); font-size: var(--fs-base); line-height: 1.5;
+  color: var(--fg); background: var(--bg); -webkit-font-smoothing: antialiased;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease);
+}
+button { font-family: inherit; cursor: pointer; }
+input, select, button, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+svg { display: block; }
+h1, h2, h3, h4 { line-height: 1.2; font-weight: 650; letter-spacing: -.01em; }
+a { color: var(--accent-600); }
+[data-theme="dark"] a { color: var(--accent-400); }
+:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); border-radius: var(--r-sm); }
+[hidden] { display: none !important; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-subtle); background-clip: padding-box; }
+
+.icon { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icon-sm { width: 15px; height: 15px; }
+.icon-lg { width: 22px; height: 22px; }
+

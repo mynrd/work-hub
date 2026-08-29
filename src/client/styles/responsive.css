@@ -1,0 +1,152 @@
+/* Every breakpoint lives here, in one file, largest first.
+   Nothing above this file knows a phone exists; this is the whole mobile pass. */
+
+/* ---------- 1080px: the two-pane grids collapse ---------- */
+@media (max-width: 1080px) {
+  .split { grid-template-columns: minmax(0, 1fr); }
+  .conv-layout { grid-template-columns: minmax(0, 1fr); }
+
+  /* Stacked, a sticky viewport-tall session list sits between the reader and
+     the chat: you scroll a full screen before the first message. Below this
+     width the chat comes first and the list becomes a short scroller under it. */
+  .conv-layout > .conv-list { order: 2; position: static; top: auto; max-height: 420px; }
+  .conv-layout > .col { order: 1; }
+}
+
+/* ---------- 860px: give the content column its width back ---------- */
+@media (max-width: 860px) {
+  .content { padding: var(--s-5) var(--s-4) var(--s-8); }
+  .page-head h1 { font-size: var(--fs-xl); }
+  .kv__row { flex-wrap: wrap; }
+  .kv__key { flex: 1 0 100%; }
+  .kv--inline { column-gap: var(--s-4); }
+}
+
+/* ---------- 700px: phone ---------- */
+@media (max-width: 700px) {
+  /* Topbar. The strapline and the "/" hint go first: each costs a row on a
+     390px screen and neither is reachable by touch. The nav buttons keep their
+     icon and drop their label, and the search takes a full row of its own. */
+  .topbar { padding: var(--s-2) var(--s-4); padding-top: max(var(--s-2), env(safe-area-inset-top)); }
+  .brand-text span { display: none; }
+  .brand-mark { width: 32px; height: 32px; }
+  .divider-v { display: none; }
+  .search kbd { display: none; }
+  .search { order: 10; flex: 1 1 100%; max-width: none; }
+  .topbar .btn { padding: 0 var(--s-3); }
+  .topbar .btn__label { display: none; }
+
+  /* Below 16px iOS Safari zooms the page when a field takes focus, and there
+     is no way back out to the original scale. Every focusable field opts up. */
+  .input, .select, .search input, .composer textarea { font-size: 16px; }
+
+  /* A Windows path, a folder id and a session id are all single unbreakable
+     tokens. On a phone there is no column left to scroll them in, so anything
+     monospace may break mid-token rather than push the page sideways. */
+  .mono, .cell-mono, .page-head p, .table--stack tbody td { overflow-wrap: anywhere; }
+
+  /* Dialogs go full-bleed. A centred card with 20px of gutter wastes a third
+     of a phone screen on a job detail that is mostly tables.
+     overflow: hidden matters as much as the padding - the modal is exactly
+     100dvh and scrolls internally, so an overlay scrollbar has nothing to
+     scroll and only steals ~12px off the modal's width. */
+  .overlay { padding: 0; overflow: hidden; }
+  .modal, .modal--sm, .modal.is-fullscreen {
+    width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0;
+  }
+  .modal__head { padding: var(--s-4); flex-wrap: wrap; }
+  .modal__head h3 { font-size: var(--fs-md); }
+  .modal__body { padding: var(--s-4); gap: var(--s-3); }
+  .modal__fixed { padding-bottom: var(--s-3); }
+
+  /* One scroll region, not two.
+
+     On a wide dialog .modal__fixed is a short banner and .modal__panels takes
+     the rest. On a phone that banner is five stacked meta rows plus a vertical
+     workflow track - taller than the phone itself - and because it never
+     shrinks, the panels below it collapsed to 0px and nothing in any tab could
+     be reached at all. Here the whole body scrolls as one column, and the tab
+     strip sticks to the top of it so switching tabs never means scrolling back
+     up past the workflow. */
+  .modal__body { overflow-y: auto; }
+  .modal__panels { overflow-y: visible; min-height: auto; flex: 0 0 auto; }
+  .tabs {
+    position: sticky; top: 0; z-index: 1;
+    background: var(--surface); margin: 0 calc(var(--s-4) * -1); padding: 0 var(--s-4);
+    /* Wrapped, the strip becomes a three-row block that eats the panel it
+       labels. Scroll it sideways instead. */
+    flex-wrap: nowrap;
+  }
+  .code-block pre { max-height: none; }
+
+  /* Tables become cards.
+
+     The job table is seven columns and about 900px wide, so .table-wrap turns
+     it into a sideways scroll nobody uses. A table marked .table--stack drops
+     its header row and repeats each column's name from that cell's
+     data-label instead, one field per line. */
+  .table--stack,
+  .table--stack tbody,
+  .table--stack tr,
+  .table--stack td { display: block; width: 100%; }
+  .table--stack colgroup,
+  .table--stack thead { display: none; }
+  .table--stack tbody tr {
+    border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface);
+    padding: var(--s-2) var(--s-3); margin-bottom: var(--s-3);
+  }
+  .table--stack tbody tr:last-child { margin-bottom: 0; }
+  .table--stack tbody td {
+    border-bottom: none; padding: var(--s-1) 0;
+    display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: var(--s-3); align-items: baseline;
+  }
+  .table--stack tbody td:empty { display: none; }
+  /* A cell with no name to print - the Remove button column in Settings - is a
+     plain full-width block rather than a value beside a blank label. */
+  .table--stack tbody td:not([data-label]) { display: block; }
+  .table--stack tbody td::before {
+    content: attr(data-label); color: var(--fg-subtle);
+    font-size: var(--fs-xs); font-weight: 650; letter-spacing: .04em; text-transform: uppercase;
+  }
+  /* The one-column ellipsis needs a real table layout to measure against.
+     Stacked there is nothing to overflow, so the title just wraps. */
+  .table--stack .cell-title { max-width: none; white-space: normal; overflow: visible; }
+
+  /* Stacked form fields: one control per row, full width. */
+  .field-row > .col { flex: 1 1 100%; }
+  .field-row > .col > .select,
+  .field-row > .col > .input { width: 100%; }
+}
+
+/* ---------- 560px: small phone ---------- */
+@media (max-width: 560px) {
+  .page-head { flex-direction: column; align-items: stretch; }
+  .page-head .row { flex-wrap: wrap; }
+  .page-head .btn { flex: 1 1 auto; }
+
+  .card__head { padding: var(--s-4) var(--s-4) var(--s-3); }
+  .card__body { padding: var(--s-4); }
+
+  /* A left-to-right track with arrows needs about 260px per step. Turn the
+     run of steps on its side rather than let two-and-a-bit wrap per row. */
+  .wf-track { flex-direction: column; align-items: stretch; }
+  .wf-step { min-width: 0; }
+  .wf-step__reason { max-width: none; }
+  .wf-arrow { justify-content: center; transform: rotate(90deg); }
+
+  /* Composer: label+select pairs each take a full row, Send spans one of its
+     own, and the sticky bar clears the iPhone home indicator. */
+  .composer { padding: var(--s-3); padding-bottom: max(var(--s-3), env(safe-area-inset-bottom)); }
+  .composer__controls .field { flex: 1 1 100%; }
+  .composer__controls .field > .select { flex: 1 1 auto; min-width: 0; }
+  .composer__controls > .grow { display: none; }
+  .composer__controls > .btn { flex: 1 1 100%; }
+
+  .strip { grid-template-columns: minmax(0, 1fr); }
+  .sess__row { padding: var(--s-3); }
+  .pager { flex-wrap: wrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}

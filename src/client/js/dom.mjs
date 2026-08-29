@@ -1,0 +1,86 @@
+// Pure helpers: escaping, formatting, and the small HTML fragments every view
+// builds on. Nothing here reads state or touches the network.
+
+export function esc(v) {
+  if (v === null || v === undefined) return '';
+  return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+export function relativeTime(ms) {
+  if (!ms) return 'never';
+  var diff = Date.now() - ms;
+  if (diff < 0) diff = 0;
+  var sec = Math.floor(diff / 1000);
+  if (sec < 60) return sec + 's ago';
+  var min = Math.floor(sec / 60);
+  if (min < 60) return min + ' minute' + (min === 1 ? '' : 's') + ' ago';
+  var hr = Math.floor(min / 60);
+  if (hr < 24) return hr + ' hour' + (hr === 1 ? '' : 's') + ' ago';
+  var day = Math.floor(hr / 24);
+  if (day < 30) return day + ' day' + (day === 1 ? '' : 's') + ' ago';
+  var mo = Math.floor(day / 30);
+  if (mo < 12) return mo + ' month' + (mo === 1 ? '' : 's') + ' ago';
+  return Math.floor(mo / 12) + ' year' + (Math.floor(mo / 12) === 1 ? '' : 's') + ' ago';
+}
+
+export function clockTime(ms) {
+  if (!ms) return '—';
+  var d = new Date(ms);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+export function shortId(sid) { return String(sid || '').slice(0, 8); }
+
+export function listLen(v) { return Array.isArray(v) ? v.length : 0; }
+
+export function truncated(text, limit) {
+  var s = String(text == null ? '' : text);
+  return s.length > limit ? s.slice(0, limit) + '\n… (' + (s.length - limit) + ' more characters)' : s;
+}
+
+/* Both passes are needed: the second catches a `[0m` whose ESC a writer upstream
+   already stripped, which would otherwise be shown as literal text. */
+export function stripAnsi(s) {
+  return String(s).replace(/\u001b\[[0-9;]*m/g, '').replace(/\[[0-9;]*m/g, '');
+}
+
+export function acText(job) {
+  var text = (job.acPass || 0) + ' pass / ' + (job.acTotal || 0) + ' total';
+  if (job.acImplemented > 0) text += ' · ' + job.acImplemented + ' implemented';
+  return text;
+}
+
+// ---- Badges ----------------------------------------------------------------
+
+export function badge(value, colorMap) {
+  var label = value === null || value === undefined ? '(none)' : String(value);
+  var cls = (colorMap && Object.prototype.hasOwnProperty.call(colorMap, label)) ? colorMap[label] : 'neutral';
+  return '<span class="badge badge-' + cls + ' mono">' + esc(label) + '</span>';
+}
+
+export const STATUS_COLORS = { intake: 'neutral', planned: 'info', in_progress: 'info', building: 'info', green: 'success', done: 'success', blocked: 'danger' };
+export const WORKFLOW_COLORS = { done: 'success', skipped: 'neutral', in_progress: 'info', pending: 'neutral', blocked: 'danger' };
+export const AC_COLORS = { pass: 'success', implemented: 'info', pending: 'neutral', blocked: 'danger', fail: 'danger' };
+export const TASK_COLORS = { done: 'success', in_progress: 'info', pending: 'neutral', blocked: 'danger' };
+export const CASE_COLORS = { pass: 'success', fail: 'danger', blocked: 'danger' };
+export const TIER_COLORS = { pass: 'success', fail: 'danger', blocked: 'danger' };
+
+// ---- Stock fragments -------------------------------------------------------
+
+export function errorCard(message) {
+  return '<div class="card"><div class="card__body"><div class="empty-state empty-state--sm">' +
+    '<span class="empty-state__ic"><svg class="icon icon-lg"><use href="#i-alert"/></svg></span>' +
+    '<strong>Something went wrong</strong><p class="mono">' + esc(message) + '</p></div></div></div>';
+}
+
+export function emptyState(title, text) {
+  return '<div class="empty-state empty-state--sm">' +
+    '<span class="empty-state__ic"><svg class="icon icon-lg"><use href="#i-inbox"/></svg></span>' +
+    '<strong>' + esc(title) + '</strong><p>' + esc(text) + '</p></div>';
+}
+
+export function loadingCard(title, text) {
+  return '<div class="card mb-5"><div class="card__head"><div><h3>' + esc(title) + '</h3><p>' + esc(text) + '</p></div>' +
+    '<span class="spinner" aria-hidden="true"></span></div>' +
+    '<div class="card__body"><p class="muted fs-sm">Loading…</p></div></div>';
+}
