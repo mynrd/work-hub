@@ -161,6 +161,9 @@ const DETAIL_TABS = [
 const detailTabsEl = document.getElementById('detailTabs');
 
 function setActiveTab(id) {
+  // Reader mode only makes sense on the Docs tab. The tab strip is hidden
+  // while reading, so this is a safety net rather than the normal exit path.
+  if (id !== 'docs' && modalEl.classList.contains('is-reading')) applyReading(false);
   detailTabsEl.querySelectorAll('.tab').forEach(function (btn) {
     var active = btn.getAttribute('data-tab') === id;
     btn.classList.toggle('is-active', active);
@@ -225,6 +228,24 @@ function applyFullscreen(on) {
 })();
 fullscreenBtn.addEventListener('click', function () { applyFullscreen(!modalEl.classList.contains('is-fullscreen')); });
 
+// ---- Reader mode --------------------------------------------------------------
+// Docs tab only, and never persisted (unlike FULLSCREEN_KEY): every dialog
+// open starts in normal mode regardless of how the previous one was left.
+
+const mdReadBtn = document.getElementById('mdReadBtn');
+const mdReadIconUse = document.getElementById('mdReadIconUse');
+const mdReadLabel = document.getElementById('mdReadLabel');
+
+function applyReading(on) {
+  modalEl.classList.toggle('is-reading', on);
+  mdReadBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  mdReadBtn.setAttribute('title', on ? 'Exit reader' : 'Read');
+  mdReadIconUse.setAttribute('href', on ? '#i-x' : '#i-book');
+  mdReadLabel.textContent = on ? 'Exit' : 'Read';
+}
+
+mdReadBtn.addEventListener('click', function () { applyReading(!modalEl.classList.contains('is-reading')); });
+
 // ---- Open / close -----------------------------------------------------------
 
 // The job the dialog is currently showing - Resolve acts on this one.
@@ -232,6 +253,7 @@ let currentJob = null;
 
 export function openDetail(job) {
   currentJob = job;
+  applyReading(false);
   var idLabel = job.id !== null && job.id !== undefined ? String(job.id) : job.folder;
   document.getElementById('detailIdLabel').textContent = idLabel + ' ';
   document.getElementById('detailTitleId').textContent = job.title || '(untitled)';
@@ -265,6 +287,7 @@ export function openDetail(job) {
   var files = Array.isArray(job.mdFiles) ? job.mdFiles : [];
   var mdTabs = document.getElementById('mdTabs');
   var mdContent = document.getElementById('mdContent');
+  mdReadBtn.hidden = files.length === 0;
   if (files.length === 0) {
     mdTabs.innerHTML = '';
     mdTabs.hidden = true;
@@ -297,13 +320,19 @@ export function openDetail(job) {
   document.getElementById('detailCloseBtn').focus();
 }
 
-function closeDetail() { overlay.classList.remove('is-open'); disarmResolve(); }
+function closeDetail() { overlay.classList.remove('is-open'); disarmResolve(); applyReading(false); }
 
 document.getElementById('detailCloseBtn').addEventListener('click', closeDetail);
 overlay.addEventListener('click', function (e) { if (e.target === overlay) closeDetail(); });
 document.addEventListener('keydown', function (e) {
   if (!overlay.classList.contains('is-open')) return;
-  if (e.key === 'Escape') { closeDetail(); return; }
+  if (e.key === 'Escape') {
+    // Reader mode swallows the first Escape - it exits reading and leaves the
+    // dialog open; a second Escape then closes the dialog as it always has.
+    if (modalEl.classList.contains('is-reading')) { applyReading(false); return; }
+    closeDetail();
+    return;
+  }
   if (e.key === 'f' || e.key === 'F') {
     var tag = document.activeElement && document.activeElement.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;

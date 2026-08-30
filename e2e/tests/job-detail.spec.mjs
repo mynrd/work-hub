@@ -138,6 +138,37 @@ test('Maximise toggles fullscreen, and the state persists across a reload', asyn
   await expect(d.modal).not.toHaveClass(/is-fullscreen/);
 });
 
+test('Read expands the Docs tab to fill the screen, and Escape backs out without losing the doc', async ({ page }) => {
+  await openJob(page, 'A job touched today');
+  const d = detail(page);
+  await d.tab('docs').click();
+
+  const chips = page.locator('#mdTabs .chip');
+  await chips.nth(1).click();
+  await expect(chips.nth(1)).toHaveClass(/is-active/);
+
+  await d.read.click();
+  await expect(d.modal).toHaveClass(/is-reading/);
+  // Scoped to the detail modal - '.modal__head' alone also matches the OTP dialog's head.
+  await expect(d.modal.locator('.modal__head')).toBeHidden();
+  await expect(page.locator('#detailTabs')).toBeHidden();
+  await expect(page.locator('#mdTabs')).toBeVisible();
+  await expect(page.locator('#mdContent')).toBeVisible();
+  // The selected doc survives entering reader mode.
+  await expect(chips.nth(1)).toHaveClass(/is-active/);
+
+  // First Escape exits reader mode only - the dialog stays open on the same tab and doc.
+  await page.keyboard.press('Escape');
+  await expect(d.modal).not.toHaveClass(/is-reading/);
+  await expect(d.overlay).toHaveClass(/is-open/);
+  await expect(d.tab('docs')).toHaveClass(/is-active/);
+  await expect(chips.nth(1)).toHaveClass(/is-active/);
+
+  // Second Escape closes the dialog as it always has.
+  await page.keyboard.press('Escape');
+  await expect(d.overlay).not.toHaveClass(/is-open/);
+});
+
 test('Escape and the close button both close the dialog', async ({ page }) => {
   const d = detail(page);
 

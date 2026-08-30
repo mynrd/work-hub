@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { encodeProjectFolder } from '../../src/lib/transcripts.mjs';
@@ -59,6 +60,48 @@ function copyDir(from, to) {
   }
 }
 
+function git(dir, args) {
+  execFileSync('git', args, {
+    cwd: dir,
+    env: Object.assign({}, process.env, {
+      GIT_AUTHOR_NAME: 'Work Hub Fixture', GIT_AUTHOR_EMAIL: 'fixture@work-hub.test',
+      GIT_COMMITTER_NAME: 'Work Hub Fixture', GIT_COMMITTER_EMAIL: 'fixture@work-hub.test',
+    }),
+    stdio: 'ignore',
+  });
+}
+
+/**
+ * Turns `dir` into a small real git repo for the Branch and Commits tab: two
+ * commits on `main`, a second branch (`feature-branch`) pointing at the first
+ * one, and uncommitted changes covering all three Current changes groups -
+ * a staged edit, an unstaged edit, and an untracked file.
+ */
+function seedGitRepo(dir) {
+  fs.writeFileSync(path.join(dir, 'README.md'), '# proj-a\n\nFixture project for the work-hub e2e suite.\n');
+  fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n\n- Initial version\n');
+
+  git(dir, ['init']);
+  // Not --initial-branch=main: that flag needs git >= 2.28. Pointing HEAD at
+  // refs/heads/main before the first commit works on any git version.
+  git(dir, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-m', 'Initial import of the fixture project']);
+
+  fs.appendFileSync(path.join(dir, 'CHANGELOG.md'), '- Second entry\n');
+  git(dir, ['add', 'CHANGELOG.md']);
+  git(dir, ['commit', '-m', 'Add a changelog entry']);
+
+  git(dir, ['branch', 'feature-branch']);
+
+  fs.appendFileSync(path.join(dir, 'README.md'), '\nStaged edit.\n');
+  git(dir, ['add', 'README.md']);
+
+  fs.appendFileSync(path.join(dir, 'CHANGELOG.md'), '- Unstaged entry\n');
+
+  fs.writeFileSync(path.join(dir, 'untracked-note.txt'), 'not committed\n');
+}
+
 /** Every file under `dir`, recursively, stamped to `when`. */
 function touchTree(dir, when) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -89,6 +132,8 @@ export function buildTestEnv() {
   // Written just now, so without this it would land in "Worked today" beside the
   // one job that is supposed to be there. Backdate it into "Others".
   touchTree(resolved, new Date('2020-05-05T00:00:00Z'));
+
+  seedGitRepo(projA);
 
   const projEmpty = path.join(home, 'projects', 'proj-empty');
   fs.mkdirSync(projEmpty, { recursive: true });

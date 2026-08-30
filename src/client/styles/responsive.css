@@ -51,7 +51,7 @@
      100dvh and scrolls internally, so an overlay scrollbar has nothing to
      scroll and only steals ~12px off the modal's width. */
   .overlay { padding: 0; overflow: hidden; }
-  .modal, .modal--sm, .modal.is-fullscreen {
+  .modal, .modal--sm, .modal.is-fullscreen, .modal.is-reading {
     width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0;
   }
   .modal__head { padding: var(--s-4); flex-wrap: wrap; }
@@ -70,13 +70,20 @@
      up past the workflow. */
   .modal__body { overflow-y: auto; }
   .modal__panels { overflow-y: visible; min-height: auto; flex: 0 0 auto; }
-  .tabs {
+  /* #detailTabs, not the bare .tabs class: the negative margin cancels
+     .modal__body's own padding and the sticky top:0 assumes nothing else is
+     stuck above it, both true only inside the dialog. */
+  #detailTabs {
     position: sticky; top: 0; z-index: 1;
     background: var(--surface); margin: 0 calc(var(--s-4) * -1); padding: 0 var(--s-4);
     /* Wrapped, the strip becomes a three-row block that eats the panel it
        labels. Scroll it sideways instead. */
     flex-wrap: nowrap;
   }
+  /* Project page tab bar: same three-label crowding, but the page has no
+     fixed-height panel below it to crush, so just keep it one row and let it
+     scroll sideways - no sticky, it would fight the sticky topbar above it. */
+  #projectTabs { flex-wrap: nowrap; }
   .code-block pre { max-height: none; }
 
   /* Tables become cards.
@@ -116,6 +123,10 @@
   .field-row > .col { flex: 1 1 100%; }
   .field-row > .col > .select,
   .field-row > .col > .input { width: 100%; }
+
+  /* Git compare view: Before/After side by side has no room on a phone, so it
+     becomes Before then After, each full width. */
+  .compare { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---------- 560px: small phone ---------- */

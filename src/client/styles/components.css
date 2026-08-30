@@ -58,7 +58,13 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-base);
   overflow: hidden;
 }
 .overlay.is-open .modal { transform: none; }
-.modal.is-fullscreen { max-width: calc(100vw - var(--s-3) * 2); max-height: calc(100dvh - var(--s-3) * 2); border-radius: var(--r-md); }
+.modal.is-fullscreen, .modal.is-reading { max-width: calc(100vw - var(--s-3) * 2); max-height: calc(100dvh - var(--s-3) * 2); border-radius: var(--r-md); }
+/* Reader mode (Docs tab only): the dialog header, the fixed meta/workflow
+   block and the detail tab strip disappear, leaving #mdTabs (so the reader
+   can still switch files) and #mdContent to fill the whole modal body. */
+.modal.is-reading .modal__head,
+.modal.is-reading .modal__fixed,
+.modal.is-reading .tabs { display: none; }
 .modal--sm { max-width: 520px; }
 .modal__head { flex: 0 0 auto; display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-3); padding: var(--s-5) var(--s-5) var(--s-4); border-bottom: 1px solid var(--border); }
 .modal__head h3 { font-size: var(--fs-lg); display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
@@ -120,6 +126,9 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-base);
 .chip:hover { border-color: var(--fg-subtle); color: var(--fg); }
 .chip.is-active { background: var(--accent-50); border-color: var(--accent-300); color: var(--accent-700); }
 [data-theme="dark"] .chip.is-active { background: color-mix(in srgb, var(--accent-500) 18%, transparent); border-color: var(--accent-600); color: var(--accent-300); }
+
+/* ---------- Docs toolbar (file chips + reader toggle) ---------- */
+.docs-toolbar { justify-content: space-between; }
 
 /* ---------- Code block ---------- */
 .code-block { position: relative; }

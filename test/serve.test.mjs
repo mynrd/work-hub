@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 import { parseArgs, createServer } from '../src/serve.mjs';
 import { generateSecret, totp, STEP_SECONDS } from '../src/lib/totp.mjs';
@@ -496,4 +497,145 @@ test('the resolve route writes the job workflow and enforces path safety', async
 
   fs.rmSync(project, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+// ── AC 8: /api/projects/:pid/git/* ───────────────────────────────────────────
+
+const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t.local', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t.local' };
+
+/** A throwaway git repo (outside the work-hub tree) with one commit on main. */
+function gitFixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-serve-git-'));
+  const run = (args) => execFileSync('git', args, { cwd: dir, env: GIT_ENV, encoding: 'utf8' });
+  run(['init', '-q', '-b', 'main']);
+  run(['config', 'commit.gpgsign', 'false']);
+  run(['config', 'core.autocrlf', 'false']);
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'line1\n');
+  run(['add', '-A']);
+  run(['commit', '-q', '-m', 'first']);
+  return dir;
+}
+
+test('AC 8: git routes sit behind the same pid guard as every other project route', async () => {
+  const home = tempHome();
+  saveConfig({ projects: [PROJ_A] }, home);
+  await withServer({ home }, async (get) => {
+    for (const route of ['branches', 'status', 'commits?branch=main&skip=0']) {
+      assert.equal((await get(`/api/projects/D--not-configured/git/${route}`)).status, 404);
+    }
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 8: git routes sit behind the same OTP session gate as every other project route', async () => {
+  const home = tempHome();
+  saveConfig({ projects: [PROJ_A] }, home);
+  const pid = encodeProjectId(path.resolve(PROJ_A));
+  await withServer({ home, otpSecret: generateSecret() }, async (get) => {
+    assert.equal((await get(`/api/projects/${pid}/git/branches`)).status, 401);
+    assert.equal((await get(`/api/projects/${pid}/git/status`)).status, 401);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 8: a real git repo answers branches, status, and commits over the route', async () => {
+  const home = tempHome();
+  const repo = gitFixture();
+  saveConfig({ projects: [repo] }, home);
+  const pid = encodeProjectId(path.resolve(repo));
+  await withServer({ home }, async (get) => {
+    const branches = await (await get(`/api/projects/${pid}/git/branches`)).json();
+    assert.deepEqual(branches, { isRepo: true, current: 'main', branches: ['main'] });
+
+    const status = await (await get(`/api/projects/${pid}/git/status`)).json();
+    assert.deepEqual(status, { isRepo: true, staged: [], unstaged: [], untracked: [] });
+
+    const commits = await (await get(`/api/projects/${pid}/git/commits?branch=main&skip=0`)).json();
+    assert.equal(commits.commits.length, 1);
+    assert.equal(commits.commits[0].subject, 'first');
+    assert.equal(commits.hasMore, false);
+
+    const sha = commits.commits[0].sha;
+    const files = await (await get(`/api/projects/${pid}/git/commits/${sha}/files`)).json();
+    assert.deepEqual(files.files.map((f) => f.path), ['a.txt']);
+
+    const file = await (await get(`/api/projects/${pid}/git/commits/${sha}/file?path=a.txt`)).json();
+    assert.equal(file.after, 'line1\n');
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test('AC 8: a project folder that is not a git repository is a 200 with isRepo: false, not an error', async () => {
+  const home = tempHome();
+  // Outside the work-hub tree entirely - a folder under test/fixtures/ is still
+  // inside this repo's own work tree, so `git rev-parse` there would say yes.
+  const notRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-serve-notrepo-'));
+  saveConfig({ projects: [notRepo] }, home);
+  const pid = encodeProjectId(path.resolve(notRepo));
+  await withServer({ home }, async (get) => {
+    const res = await get(`/api/projects/${pid}/git/branches`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { isRepo: false });
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(notRepo, { recursive: true, force: true });
+});
+
+test('AC 8: a malformed sha is 400 and never reaches git', async () => {
+  const home = tempHome();
+  const repo = gitFixture();
+  saveConfig({ projects: [repo] }, home);
+  const pid = encodeProjectId(path.resolve(repo));
+  await withServer({ home }, async (get) => {
+    for (const bad of ['not-a-sha', '..%2f..%2fetc-passwd', '']) {
+      assert.equal((await get(`/api/projects/${pid}/git/commits/${bad}/files`)).status, 400, bad);
+      assert.equal((await get(`/api/projects/${pid}/git/commits/${bad}/file?path=a.txt`)).status, 400, bad);
+    }
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test('AC 8: an unknown branch and a bad skip are 400 before git runs', async () => {
+  const home = tempHome();
+  const repo = gitFixture();
+  saveConfig({ projects: [repo] }, home);
+  const pid = encodeProjectId(path.resolve(repo));
+  await withServer({ home }, async (get) => {
+    assert.equal((await get(`/api/projects/${pid}/git/commits?branch=no-such-branch&skip=0`)).status, 400);
+    assert.equal((await get(`/api/projects/${pid}/git/commits?branch=main&skip=-1`)).status, 400);
+    assert.equal((await get(`/api/projects/${pid}/git/commits?branch=main&skip=abc`)).status, 400);
+    assert.equal((await get(`/api/projects/${pid}/git/commits?skip=0`)).status, 400, 'branch is required');
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test('AC 8: a status/file path or area not reported by git status is 400', async () => {
+  const home = tempHome();
+  const repo = gitFixture();
+  saveConfig({ projects: [repo] }, home);
+  const pid = encodeProjectId(path.resolve(repo));
+  await withServer({ home }, async (get) => {
+    assert.equal((await get(`/api/projects/${pid}/git/status/file?path=nope.txt&area=untracked`)).status, 400);
+    assert.equal((await get(`/api/projects/${pid}/git/status/file?path=a.txt&area=bogus`)).status, 400);
+    assert.equal((await get(`/api/projects/${pid}/git/status/file?area=staged`)).status, 400, 'path is required');
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test('AC 8: only GET is supported on the git routes', async () => {
+  const home = tempHome();
+  const repo = gitFixture();
+  saveConfig({ projects: [repo] }, home);
+  const pid = encodeProjectId(path.resolve(repo));
+  await withServer({ home }, async (get) => {
+    assert.equal((await get(`/api/projects/${pid}/git/branches`, { method: 'POST' })).status, 405);
+    assert.equal((await get(`/api/projects/${pid}/git/status`, { method: 'POST' })).status, 405);
+    assert.equal((await get(`/api/projects/${pid}/git/commits?branch=main&skip=0`, { method: 'POST' })).status, 405);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
 });

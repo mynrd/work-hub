@@ -50,6 +50,7 @@ export const detail = (page) => ({
   title: page.locator('#detailTitleId'),
   close: page.locator('#detailCloseBtn'),
   fullscreen: page.locator('#detailFullscreenBtn'),
+  read: page.locator('#mdReadBtn'),
   resolve: page.locator('#detailResolveBtn'),
   resolveLabel: page.locator('#detailResolveLabel'),
   tab: (id) => page.locator(`#detailTabs .tab[data-tab="${id}"]`),
@@ -67,9 +68,26 @@ export const composer = (page) => ({
   status: page.locator('.composer__status'),
 });
 
+/** The project page's own tab strip - Work Items / Conversation / Branch and Commits. */
+export const projectTabs = (page) => ({
+  tab: (id) => page.locator(`#projectTabs .tab[data-tab="${id}"]`),
+  panel: (id) => page.locator(`#panel-${id}`),
+});
+
 /** The card whose <h3> is exactly `title`. */
 export const cardTitled = (page, title) =>
   page.locator('.card').filter({ has: page.locator('.card__head h3', { hasText: new RegExp(`^${title}$`) }) });
+
+/** The Branch and Commits tab. */
+export const gitPane = (page) => ({
+  root: page.locator('#gitPane'),
+  branchSelect: page.locator('#gitBranchSelect'),
+  commitRow: (subject) => page.locator('#gitPane .git-commit-row', { hasText: subject }),
+  currentFileRow: (area, filePath) => page.locator(`#gitPane .git-file-row[data-area="${area}"][data-path="${filePath}"]`),
+  commitFileRow: (filePath) => page.locator(`#gitPane .git-file-row[data-sha][data-path="${filePath}"]`),
+  comparePane: (side) => page.locator(`#gitPane .compare__pane[data-side="${side}"]`),
+  backBtn: page.locator('#gitCompareBackBtn'),
+});
 
 /** A job row by the title shown in its Title cell. */
 export const jobRow = (page, title) =>

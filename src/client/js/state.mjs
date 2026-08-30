@@ -9,6 +9,8 @@ export const state = {
   jobs: {},            // pid -> { today[], notStarted[], others[], unreadable[] }, loaded on demand
   sessions: {},        // pid -> { transcriptDir, sessions[] }
   sessPage: {},        // pid -> 0-based page of the conversation list
+  projectTab: {},      // pid -> 'work' | 'conversation' | 'git', which project-page tab is open
+  gitView: {},         // pid -> the Branch and Commits tab's own state + cache (see git-card.mjs)
   chat: null,          // { sessionId, messages[] }
   activeRun: null,
   search: '',

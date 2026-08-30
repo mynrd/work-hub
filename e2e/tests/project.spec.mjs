@@ -1,11 +1,113 @@
 import { test, expect } from '@playwright/test';
 
-import { goto, projectId, topbar, cardTitled, jobRow } from '../support/app.mjs';
+import { goto, projectId, topbar, cardTitled, jobRow, projectTabs, gitPane } from '../support/app.mjs';
 
 test.beforeEach(async ({ page }) => {
   await goto(page, '#/');
   await goto(page, `#/p/${await projectId(page, 'proj-a')}`);
   await expect(page.locator('.page-head h1')).toHaveText('proj-a');
+});
+
+test('the page shows three tabs with Work Items active by default', async ({ page }) => {
+  const tabs = projectTabs(page);
+  await expect(page.locator('#projectTabs .tab')).toHaveText(['Work Items', 'Conversation', 'Branch and Commits']);
+  await expect(tabs.tab('work')).toHaveAttribute('aria-selected', 'true');
+  await expect(tabs.tab('conversation')).toHaveAttribute('aria-selected', 'false');
+  await expect(tabs.tab('git')).toHaveAttribute('aria-selected', 'false');
+  // The work pane is the one actually in the DOM - the others are not built until selected.
+  await expect(cardTitled(page, 'Worked today')).toBeVisible();
+  await expect(page.locator('.sess')).toHaveCount(0);
+});
+
+test('switching to Conversation shows the sessions card and leaves it selected across a repaint', async ({ page }) => {
+  const tabs = projectTabs(page);
+  await tabs.tab('conversation').click();
+  await expect(tabs.tab('conversation')).toHaveAttribute('aria-selected', 'true');
+  await expect(cardTitled(page, 'Conversations')).toBeVisible();
+  await expect(page.locator('.table-wrap')).toHaveCount(0);
+
+  // Same code path the 30s auto-refresh timer runs: loadJobs + loadSessions,
+  // then renderCurrentPage. The tab lives in state, not in the rebuilt DOM, so
+  // it survives the repaint.
+  await page.locator('#projectRefreshBtn').click();
+  await expect(page.locator('#projectRefreshLabel')).toHaveText('Refresh');
+  await expect(tabs.tab('conversation')).toHaveAttribute('aria-selected', 'true');
+  await expect(cardTitled(page, 'Conversations')).toBeVisible();
+});
+
+test('the Branch and Commits tab lists Current changes, staged/unstaged/untracked', async ({ page }) => {
+  const git = gitPane(page);
+  await projectTabs(page).tab('git').click();
+  await expect(git.root).toBeVisible();
+
+  const currentChanges = cardTitled(page, 'Current changes');
+  await expect(currentChanges).toContainText('Staged changes');
+  await expect(git.currentFileRow('staged', 'README.md')).toContainText('modified');
+
+  await expect(currentChanges).toContainText('Changes');
+  await expect(git.currentFileRow('unstaged', 'CHANGELOG.md')).toContainText('modified');
+  await expect(git.currentFileRow('untracked', 'untracked-note.txt')).toContainText('new');
+});
+
+test('the branch selector lists local branches with the current one marked and pre-selected', async ({ page }) => {
+  const git = gitPane(page);
+  await projectTabs(page).tab('git').click();
+  await expect(git.branchSelect).toBeVisible();
+  await expect(git.branchSelect.locator('option')).toHaveText(['feature-branch', 'main (current)']);
+  await expect(git.branchSelect).toHaveValue('main');
+});
+
+test('commits for the selected branch are listed newest first with sha, subject, author, and when', async ({ page }) => {
+  const git = gitPane(page);
+  await projectTabs(page).tab('git').click();
+  const commits = cardTitled(page, 'Branches and commits');
+  const rows = commits.locator('.git-commit-row');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText('Add a changelog entry');
+  await expect(rows.nth(0)).toContainText('Work Hub Fixture');
+  await expect(rows.nth(1)).toContainText('Initial import of the fixture project');
+});
+
+test('clicking a commit lists its changed files, and clicking one opens a before/after compare', async ({ page }) => {
+  const git = gitPane(page);
+  await projectTabs(page).tab('git').click();
+  await git.commitRow('Add a changelog entry').click();
+
+  const fileRow = git.commitFileRow('CHANGELOG.md');
+  await expect(fileRow).toContainText('modified');
+
+  await fileRow.click();
+  await expect(git.backBtn).toBeVisible();
+  await expect(git.comparePane('before')).not.toContainText('Second entry');
+  await expect(git.comparePane('after')).toContainText('Second entry');
+
+  await git.backBtn.click();
+  await expect(git.backBtn).toHaveCount(0);
+  await expect(git.commitFileRow('CHANGELOG.md')).toBeVisible();
+});
+
+test('clicking a file under Current changes opens the same before/after compare view', async ({ page }) => {
+  const git = gitPane(page);
+  await projectTabs(page).tab('git').click();
+
+  // Unstaged: the index (committed content) vs the file on disk.
+  await git.currentFileRow('unstaged', 'CHANGELOG.md').click();
+  await expect(git.comparePane('before')).not.toContainText('Unstaged entry');
+  await expect(git.comparePane('after')).toContainText('Unstaged entry');
+  await git.backBtn.click();
+
+  // Untracked: an empty before against the file on disk.
+  await git.currentFileRow('untracked', 'untracked-note.txt').click();
+  await expect(git.comparePane('before')).toContainText('(empty)');
+  await expect(git.comparePane('after')).toContainText('not committed');
+});
+
+test('the Branch and Commits tab shows a plain message for a folder that is not a git repository', async ({ page }) => {
+  await goto(page, '#/');
+  await goto(page, `#/p/${await projectId(page, 'proj-empty')}`);
+  await projectTabs(page).tab('git').click();
+  await expect(page.locator('#gitPane')).toContainText('Not a git repository.');
+  await expect(page.locator('#gitBranchSelect')).toHaveCount(0);
 });
 
 test('jobs land in the group their progress.json puts them in', async ({ page }) => {
@@ -57,6 +159,7 @@ test('Refresh re-scans this folder and restores the button', async ({ page }) =>
 });
 
 test('the conversations card lists the session for this folder', async ({ page }) => {
+  await projectTabs(page).tab('conversation').click();
   const card = cardTitled(page, 'Conversations');
   const rows = card.locator('a.sess__row');
   await expect(rows).toHaveCount(1);
@@ -69,12 +172,14 @@ test('the conversations card lists the session for this folder', async ({ page }
    injectable, so a click would run `cmd /c start` and open a real console
    window on whatever machine the suite is running on. */
 test('the Terminal button is present and says what it will run', async ({ page }) => {
+  await projectTabs(page).tab('conversation').click();
   const btn = page.locator('#terminalBtn');
   await expect(btn).toBeVisible();
   await expect(btn).toHaveAttribute('title', /claude remote-control --spawn same-dir/);
 });
 
 test('New goes to the new-conversation route', async ({ page }) => {
+  await projectTabs(page).tab('conversation').click();
   await page.locator('#newConvBtn').click();
   await expect(page.locator('.page-head h1')).toHaveText('New conversation');
   expect(page.url()).toContain('/s/new');
@@ -85,6 +190,8 @@ test('a folder with no .work and no transcripts shows both empty states', async 
   await goto(page, `#/p/${await projectId(page, 'proj-empty')}`);
   await expect(page.locator('.page-head h1')).toHaveText('proj-empty');
   await expect(cardTitled(page, 'Worked today')).toContainText('Nothing has been touched today');
+
+  await projectTabs(page).tab('conversation').click();
   await expect(cardTitled(page, 'Conversations')).toContainText('Claude Code has never run with this folder');
 });
 

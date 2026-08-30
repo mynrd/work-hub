@@ -6,3 +6,6 @@ e2e/test-results/
 e2e/playwright-report/
 e2e/blob-report/
 e2e/.cache/
+
+# mynrd-flow work folders. Local planning state, not source.
+.work/

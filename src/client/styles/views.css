@@ -122,6 +122,33 @@
 .ctx-badge { background: var(--surface-3); color: var(--fg-subtle); border-radius: var(--r-pill); padding: 2px 9px; font-weight: 650; font-size: 11px; }
 .ctx-path { font-family: var(--font-mono); overflow-wrap: anywhere; }
 
+/* ---------- Git (Branch and Commits tab) ---------- */
+.git-group + .git-group { margin-top: var(--s-4); }
+.git-group__title { font-size: var(--fs-xs); font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--fg-subtle); margin-bottom: var(--s-2); }
+.git-file-list { display: flex; flex-direction: column; gap: 2px; }
+.git-file-row {
+  display: flex; align-items: center; gap: var(--s-3); width: 100%; text-align: left;
+  padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: none; border: none;
+  color: inherit; transition: background var(--t-fast);
+}
+.git-file-row:hover { background: var(--surface-2); }
+.git-file-row__path { overflow-wrap: anywhere; }
+.git-file-row__counts { margin-left: auto; white-space: nowrap; }
+.git-commit-detail td { background: var(--surface-2); padding: var(--s-3) var(--s-4) !important; }
+
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-4); align-items: start; }
+.compare__pane { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.compare__pane-head {
+  padding: var(--s-2) var(--s-3); font-size: var(--fs-xs); font-weight: 650; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--fg-subtle); background: var(--surface-2); border-bottom: 1px solid var(--border);
+}
+.compare__pane-body { max-height: 70vh; overflow: auto; }
+.compare__pane-body > p.muted { padding: var(--s-3); }
+.compare__code { font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.5; }
+.compare__line { padding: 0 var(--s-3); white-space: pre; }
+.compare__line.is-removed { background: var(--danger-bg); }
+.compare__line.is-added { background: var(--success-bg); }
+
 /* ---------- Composer ---------- */
 .composer { position: sticky; bottom: 0; background: var(--surface); border: 1px solid var(--border); border-top-color: var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-md); padding: var(--s-3) var(--s-4) var(--s-4); }
 .composer__preview { font-family: var(--font-mono); font-size: 11px; color: var(--fg-subtle); background: var(--surface-3); border-radius: var(--r-sm); padding: 5px var(--s-3); margin-bottom: var(--s-2); overflow-x: auto; white-space: pre; }

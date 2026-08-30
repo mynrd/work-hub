@@ -20,6 +20,7 @@ import { listSessions, readSessionChat, resolveTranscriptDir } from './lib/trans
 import { createUsageCache } from './lib/usage.mjs';
 import { createRunRegistry } from './lib/claude-run.mjs';
 import { resolveJob } from './lib/resolve-job.mjs';
+import { listBranches, listCommits, commitFiles, fileAtCommit, workingStatus, workingFile } from './lib/git.mjs';
 import { openTerminal } from './lib/terminal.mjs';
 import { renderMarkdown } from './lib/markdown.mjs';
 import { loadEnrollment, createSessionStore, enrollmentPath } from './lib/authstore.mjs';
@@ -253,6 +254,79 @@ function handleMarkdownRoute(res, projectPath, rawFolder, rawFile) {
     return;
   }
   sendText(res, 200, html, 'text/html; charset=utf-8');
+}
+
+// ── Git inspection routes ────────────────────────────────────────────────────
+
+const GIT_SHA_RE = /^[0-9a-f]{7,40}$/i;
+const GIT_STATUS_AREAS = ['staged', 'unstaged', 'untracked'];
+
+async function handleGitBranches(res, projectPath) {
+  try {
+    sendJson(res, 200, await listBranches(projectPath));
+  } catch (err) {
+    sendJson(res, 500, { error: err.message });
+  }
+}
+
+async function handleGitStatus(res, projectPath) {
+  try {
+    sendJson(res, 200, await workingStatus(projectPath));
+  } catch (err) {
+    sendJson(res, 500, { error: err.message });
+  }
+}
+
+async function handleGitStatusFile(res, projectPath, filePath, area) {
+  if (!filePath || !GIT_STATUS_AREAS.includes(area)) {
+    sendJson(res, 400, { error: `path is required and area must be one of ${GIT_STATUS_AREAS.join(', ')}` });
+    return;
+  }
+  try {
+    sendJson(res, 200, await workingFile(projectPath, filePath, area));
+  } catch (err) {
+    sendJson(res, 400, { error: err.message });
+  }
+}
+
+async function handleGitCommits(res, projectPath, branch, skip) {
+  if (!branch || !Number.isInteger(skip) || skip < 0) {
+    sendJson(res, 400, { error: 'branch is required and skip must be a non-negative integer' });
+    return;
+  }
+  try {
+    sendJson(res, 200, await listCommits(projectPath, branch, skip));
+  } catch (err) {
+    sendJson(res, 400, { error: err.message });
+  }
+}
+
+async function handleGitCommitFiles(res, projectPath, sha) {
+  if (!sha || !GIT_SHA_RE.test(sha)) {
+    sendJson(res, 400, { error: 'Malformed commit sha' });
+    return;
+  }
+  try {
+    sendJson(res, 200, await commitFiles(projectPath, sha));
+  } catch (err) {
+    sendJson(res, 404, { error: err.message });
+  }
+}
+
+async function handleGitCommitFile(res, projectPath, sha, filePath) {
+  if (!sha || !GIT_SHA_RE.test(sha)) {
+    sendJson(res, 400, { error: 'Malformed commit sha' });
+    return;
+  }
+  if (!filePath) {
+    sendJson(res, 400, { error: 'path is required' });
+    return;
+  }
+  try {
+    sendJson(res, 200, await fileAtCommit(projectPath, sha, filePath));
+  } catch (err) {
+    sendJson(res, 400, { error: err.message });
+  }
 }
 
 // ── Server ───────────────────────────────────────────────────────────────────
@@ -611,6 +685,50 @@ export function createServer({
           handleRunStart(req, res, projectPath, pid, sid);
           return;
         }
+      }
+
+      // /api/projects/:pid/git/* - read-only git inspection
+      if (parts[1] === 'git') {
+        if (parts[2] === 'branches' && parts.length === 3) {
+          if (req.method !== 'GET') { sendJson(res, 405, { error: 'Only GET is supported here' }); return; }
+          handleGitBranches(res, projectPath);
+          return;
+        }
+
+        if (parts[2] === 'status' && parts.length === 3) {
+          if (req.method !== 'GET') { sendJson(res, 405, { error: 'Only GET is supported here' }); return; }
+          handleGitStatus(res, projectPath);
+          return;
+        }
+
+        if (parts[2] === 'status' && parts[3] === 'file' && parts.length === 4) {
+          if (req.method !== 'GET') { sendJson(res, 405, { error: 'Only GET is supported here' }); return; }
+          handleGitStatusFile(res, projectPath, url.searchParams.get('path'), url.searchParams.get('area'));
+          return;
+        }
+
+        if (parts[2] === 'commits' && parts.length === 3) {
+          if (req.method !== 'GET') { sendJson(res, 405, { error: 'Only GET is supported here' }); return; }
+          const branch = url.searchParams.get('branch');
+          const skip = Number(url.searchParams.get('skip') ?? '0');
+          handleGitCommits(res, projectPath, branch, skip);
+          return;
+        }
+
+        if (parts[2] === 'commits' && parts[4] === 'files' && parts.length === 5) {
+          if (req.method !== 'GET') { sendJson(res, 405, { error: 'Only GET is supported here' }); return; }
+          handleGitCommitFiles(res, projectPath, decodeSegment(parts[3]));
+          return;
+        }
+
+        if (parts[2] === 'commits' && parts[4] === 'file' && parts.length === 5) {
+          if (req.method !== 'GET') { sendJson(res, 405, { error: 'Only GET is supported here' }); return; }
+          handleGitCommitFile(res, projectPath, decodeSegment(parts[3]), url.searchParams.get('path'));
+          return;
+        }
+
+        sendJson(res, 404, { error: 'Not found' });
+        return;
       }
 
       sendJson(res, 404, { error: 'Not found' });

@@ -8,7 +8,7 @@
 
 import { test, expect } from '@playwright/test';
 
-import { goto, projectId, detail, jobRow, topbar, composer } from '../support/app.mjs';
+import { goto, projectId, detail, jobRow, topbar, composer, projectTabs } from '../support/app.mjs';
 import { FIXTURE_SESSION_ID } from '../support/env.mjs';
 
 const PHONE = { width: 390, height: 844 };   // iPhone 14
@@ -100,6 +100,21 @@ test.describe('tables', () => {
     await expect(page.locator('table.table--stack thead').first()).toBeVisible();
     const row = jobRow(page, 'A job touched today');
     expect(await css(row, 'display')).toBe('table-row');
+  });
+});
+
+test.describe('project page tabs', () => {
+  test('at 390px the three labels stay one row and scroll sideways, not the page', async ({ page }) => {
+    await page.setViewportSize(PHONE);
+    await goto(page, '#/');
+    await goto(page, `#/p/${await projectId(page, 'proj-a')}`);
+
+    expect(await css(page.locator('#projectTabs'), 'flex-wrap')).toBe('nowrap');
+    await expectNoSideScroll(page, 'the project page tabs at 390px');
+
+    await projectTabs(page).tab('conversation').click();
+    await expect(page.locator('.sess')).toBeVisible();
+    await expectNoSideScroll(page, 'the project page tabs after switching at 390px');
   });
 });
 
