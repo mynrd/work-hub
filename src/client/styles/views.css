@@ -52,6 +52,10 @@
 .wf-step { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: var(--s-3) var(--s-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); min-width: 120px; text-align: center; }
 .wf-step__name { font-family: var(--font-mono); font-size: var(--fs-sm); }
 .wf-step__reason { font-size: var(--fs-xs); color: var(--fg-muted); max-width: 220px; }
+.wf-step__time { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-muted); max-width: 220px; overflow-wrap: anywhere; }
+/* While a Verified run's window is open: the human-verification box carries a spinner. */
+.wf-step.is-busy { border-color: var(--accent-400); }
+.wf-step__busy { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--fg-muted); }
 .wf-arrow { display: flex; align-items: center; color: var(--fg-subtle); font-size: var(--fs-lg); padding: 0 2px; }
 
 /* ---------- Runs (progress.json runs, not spawned runs) ---------- */

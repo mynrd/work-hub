@@ -22,6 +22,11 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-base);
 .table--rows-clickable tbody tr:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent-500); }
 .cell-mono { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--fg-muted); }
 .cell-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 1px; }
+/* The Job / Title cell: id on the first line, title on the second, each
+   ellipsised on its own. `nowrap` is inherited from .cell-title. */
+.cell-job { min-width: 0; }
+.cell-job > div { overflow: hidden; text-overflow: ellipsis; }
+.cell-job__id { line-height: 1.3; }
 
 /* ---------- Badges ---------- */
 .badge {

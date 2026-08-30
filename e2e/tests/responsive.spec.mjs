@@ -86,6 +86,15 @@ test.describe('tables', () => {
     const before = await status.evaluate((el) => getComputedStyle(el, '::before').content);
     expect(before).toContain('Status');
 
+    // The merged Job / Title cell prints one label, and the title sits under
+    // the id (same left edge, lower down) rather than under the label column.
+    const jobCell = row.locator('td[data-label="Job / Title"]');
+    expect(await jobCell.evaluate((el) => getComputedStyle(el, '::before').content)).toContain('Job / Title');
+    const idBox = await jobCell.locator('.cell-job__id').boundingBox();
+    const titleBox = await jobCell.locator('.cell-job__title').boundingBox();
+    expect(Math.abs(titleBox.x - idBox.x)).toBeLessThan(1);
+    expect(titleBox.y).toBeGreaterThanOrEqual(idBox.y + idBox.height - 1);
+
     // The row is now as wide as the card, not as wide as seven columns.
     const box = await row.boundingBox();
     expect(box.width).toBeLessThanOrEqual(PHONE.width);
@@ -100,6 +109,18 @@ test.describe('tables', () => {
     await expect(page.locator('table.table--stack thead').first()).toBeVisible();
     const row = jobRow(page, 'A job touched today');
     expect(await css(row, 'display')).toBe('table-row');
+
+    // Both lines of the Job / Title cell clip to their column instead of
+    // widening the table: nowrap + hidden overflow + ellipsis on each.
+    for (const line of ['.cell-job__id', '.cell-job__title']) {
+      const el = row.locator(line);
+      expect(await css(el, 'white-space')).toBe('nowrap');
+      expect(await css(el, 'overflow-x')).toBe('hidden');
+      expect(await css(el, 'text-overflow')).toBe('ellipsis');
+    }
+    const table = page.locator('table.table--stack').first();
+    const wrap = page.locator('.table-wrap').first();
+    expect((await table.boundingBox()).width).toBeLessThanOrEqual((await wrap.boundingBox()).width + 1);
   });
 });
 

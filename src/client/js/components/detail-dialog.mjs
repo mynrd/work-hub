@@ -4,16 +4,34 @@
 // The dialog shell is static markup in index.html; this module fills it.
 
 import {
-  esc, badge, relativeTime, acText, listLen,
+  esc, badge, relativeTime, acText, listLen, stamp, elapsed,
   AC_COLORS, CASE_COLORS, STATUS_COLORS, TASK_COLORS, TIER_COLORS, WORKFLOW_COLORS,
 } from '../dom.mjs';
 import { api } from '../api.mjs';
-import { loadJobs } from '../data.mjs';
+import { loadJobs, findJob } from '../data.mjs';
 import { renderCurrentPage } from '../render.mjs';
 
 const FULLSCREEN_KEY = 'work-hub-modal-fullscreen';
 
 // ---- Panel renderers --------------------------------------------------------
+
+// `Aug 30, 14:02 → Aug 30, 17:45 (3h 43m)` under a step's badge; only one
+// half when only one stamp exists; nothing at all for a step with neither.
+function stepTime(step) {
+  var from = stamp(step.startedAt);
+  var to = stamp(step.endedAt);
+  if (!from && !to) return '';
+  var text;
+  if (from && to) {
+    var took = elapsed(step.startedAt, step.endedAt);
+    text = from + ' &#8594; ' + to + (took ? ' (' + took + ')' : '');
+  } else if (from) {
+    text = 'started ' + from;
+  } else {
+    text = 'ended ' + to;
+  }
+  return '<div class="wf-step__time">' + text + '</div>';
+}
 
 function renderWorkflow(progress) {
   var workflow = (progress && Array.isArray(progress.workflow)) ? progress.workflow : [];
@@ -23,7 +41,7 @@ function renderWorkflow(progress) {
     var name = isObj ? step.step : step;
     var reason = isObj && step.reason ? '<div class="wf-step__reason">' + esc(step.reason) + '</div>' : '';
     return '<div class="wf-step"><div class="wf-step__name">' + esc(name === null || name === undefined ? '(unnamed)' : name) + '</div>' +
-      badge(isObj ? step.status : undefined, WORKFLOW_COLORS) + reason + '</div>';
+      badge(isObj ? step.status : undefined, WORKFLOW_COLORS) + (isObj ? stepTime(step) : '') + reason + '</div>';
   }).join('<div class="wf-arrow">&#8594;</div>') + '</div>';
 }
 
@@ -315,12 +333,13 @@ export function openDetail(job) {
   }).join('');
   setActiveTab('ac');
   setResolveState(job);
+  setVerifiedState(job);
 
   overlay.classList.add('is-open');
   document.getElementById('detailCloseBtn').focus();
 }
 
-function closeDetail() { overlay.classList.remove('is-open'); disarmResolve(); applyReading(false); }
+function closeDetail() { overlay.classList.remove('is-open'); disarmResolve(); stopVerifyWatch(); applyReading(false); }
 
 document.getElementById('detailCloseBtn').addEventListener('click', closeDetail);
 overlay.addEventListener('click', function (e) { if (e.target === overlay) closeDetail(); });
@@ -351,6 +370,117 @@ document.getElementById('detailRawCopyBtn').addEventListener('click', function (
     btn.setAttribute('title', 'Copied');
     setTimeout(function () { iconUse.setAttribute('href', '#i-copy'); btn.setAttribute('title', 'Copy'); }, 1500);
   }).catch(function () { /* clipboard blocked */ });
+});
+
+// ---- Verified ---------------------------------------------------------------
+// Shown only while the job's human-verification step is in_progress. One click
+// asks the server to open a PowerShell window running
+// `claude -p '/mynrd-flow:mynrd-verified .work\<folder>'` in the project
+// folder; the AI in that window does the write, not this page. No arming step:
+// nothing here edits a file, and the window is on screen and stoppable.
+
+const verifiedBtn = document.getElementById('detailVerifiedBtn');
+const verifiedLabel = document.getElementById('detailVerifiedLabel');
+
+function awaitingVerification(progress) {
+  var list = progress && Array.isArray(progress.workflow) ? progress.workflow : [];
+  return list.some(function (s) {
+    return s && typeof s === 'object' && s.step === 'human-verification' && s.status === 'in_progress';
+  });
+}
+
+let verifyPollTimer = null;
+
+function stopVerifyWatch() {
+  if (verifyPollTimer) { clearInterval(verifyPollTimer); verifyPollTimer = null; }
+}
+
+function verifyUrl(job) {
+  return '/api/projects/' + encodeURIComponent(job.projectId) + '/jobs/' + encodeURIComponent(job.folder) + '/verify';
+}
+
+function setVerifiedState(job) {
+  stopVerifyWatch();
+  verifiedBtn.hidden = !awaitingVerification(job.progress);
+  verifiedBtn.disabled = false;
+  verifiedLabel.textContent = 'Verified';
+  verifiedBtn.title = 'Open a PowerShell window running /mynrd-flow:mynrd-verified for this job';
+}
+
+// The human-verification box in the workflow track gets a spinner while the
+// run's window is open.
+function markVerificationBusy(on) {
+  var steps = document.querySelectorAll('#detailWorkflow .wf-step');
+  for (var i = 0; i < steps.length; i++) {
+    var name = steps[i].querySelector('.wf-step__name');
+    if (!name || name.textContent !== 'human-verification') continue;
+    var busy = steps[i].querySelector('.wf-step__busy');
+    if (on && !busy) {
+      steps[i].classList.add('is-busy');
+      steps[i].insertAdjacentHTML('beforeend', '<div class="wf-step__busy"><span class="spinner"></span> verifying…</div>');
+    } else if (!on && busy) {
+      steps[i].classList.remove('is-busy');
+      busy.remove();
+    }
+  }
+}
+
+// Polls GET .../verify until the window has closed, then reloads the job so the
+// dialog and the table show what the run wrote.
+function watchVerifyRun(job) {
+  stopVerifyWatch();
+  verifiedBtn.disabled = true;
+  verifiedLabel.textContent = 'Verifying…';
+  verifiedBtn.title = 'The verification run is open in its own window. This updates when it closes.';
+  markVerificationBusy(true);
+
+  function finished(run) {
+    stopVerifyWatch();
+    if (currentJob !== job) return;
+    loadJobs(job.projectId).then(function () {
+      renderCurrentPage();
+      var fresh = findJob(job.projectId, job.folder);
+      if (!fresh || currentJob !== job) return;
+      openDetail(fresh); // re-renders the workflow track from the new progress.json
+      if (awaitingVerification(fresh.progress)) {
+        // The window closed but the step is still in_progress: the run did not
+        // (or could not) mark it. Leave the button ready for another go.
+        verifiedLabel.textContent = 'Not verified - retry';
+        verifiedBtn.title = 'The run ended' + (run && typeof run.exitCode === 'number' ? ' (exit code ' + run.exitCode + ')' : '') +
+          ' without marking this job verified. Check the window output and try again.';
+      }
+    });
+  }
+
+  function poll() {
+    api(verifyUrl(job)).then(function (run) {
+      if (currentJob !== job) { stopVerifyWatch(); return; }
+      if (!run || !run.running) finished(run);
+    }).catch(function () { /* transient - keep polling */ });
+  }
+  verifyPollTimer = setInterval(poll, 2000);
+  poll();
+}
+
+verifiedBtn.addEventListener('click', function () {
+  if (!currentJob || verifiedBtn.disabled) return;
+  var job = currentJob;
+  verifiedBtn.disabled = true;
+  verifiedLabel.textContent = 'Opening…';
+  api(verifyUrl(job), { method: 'POST' })
+    .then(function () {
+      if (currentJob === job) watchVerifyRun(job);
+    })
+    .catch(function (err) {
+      if (err.status === 409 && /already open/.test(err.message)) {
+        // A window is already running for this job - just watch it.
+        if (currentJob === job) watchVerifyRun(job);
+        return;
+      }
+      verifiedBtn.disabled = false;
+      verifiedLabel.textContent = 'Failed - retry';
+      verifiedBtn.title = err.message;
+    });
 });
 
 // ---- Resolve ----------------------------------------------------------------

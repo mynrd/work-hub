@@ -29,6 +29,37 @@ export function clockTime(ms) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+/**
+ * A workflow stamp (`startedAt` / `endedAt`, ISO with offset) as local
+ * `Aug 30, 14:02`, with the year in front only when it is not this year.
+ * '' for a missing or unparsable value, so callers can skip the line.
+ */
+export function stamp(iso) {
+  if (!iso) return '';
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  var dayPart = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  var timePart = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  var year = d.getFullYear() === new Date().getFullYear() ? '' : d.getFullYear() + ' ';
+  return year + dayPart + ', ' + timePart;
+}
+
+/** `40s`, `12m`, `3h 43m`, `2d 5h` between two stamps; '' unless both parse and end >= start. */
+export function elapsed(startIso, endIso) {
+  if (!startIso || !endIso) return '';
+  var a = new Date(startIso).getTime();
+  var b = new Date(endIso).getTime();
+  if (isNaN(a) || isNaN(b) || b < a) return '';
+  var sec = Math.floor((b - a) / 1000);
+  if (sec < 60) return sec + 's';
+  var min = Math.floor(sec / 60);
+  if (min < 60) return min + 'm';
+  var hr = Math.floor(min / 60);
+  if (hr < 24) return hr + 'h' + (min % 60 ? ' ' + (min % 60) + 'm' : '');
+  var day = Math.floor(hr / 24);
+  return day + 'd' + (hr % 24 ? ' ' + (hr % 24) + 'h' : '');
+}
+
 export function shortId(sid) { return String(sid || '').slice(0, 8); }
 
 export function listLen(v) { return Array.isArray(v) ? v.length : 0; }

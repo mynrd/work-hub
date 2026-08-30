@@ -32,13 +32,14 @@ const env = buildTestEnv();
 
 const servers = [
   { name: 'open', port: PORTS.open, otpSecret: null },
-  { name: 'gated', port: PORTS.gated, otpSecret: OTP_SECRET },
-].map(({ name, port, otpSecret }) => {
+  { name: 'gated', port: PORTS.gated, otpSecret: OTP_SECRET, idleMinutes: 0.05 }, // 3s, so the idle-lock spec finishes in seconds
+].map(({ name, port, otpSecret, idleMinutes }) => {
   const server = createServer({
     home: env.home,
     otpSecret,
     usage: stubUsage(),
     runs: createRunRegistry({ spawnFn: stubSpawn }),
+    ...(idleMinutes === undefined ? {} : { idleMinutes }),
   });
   server.listen(port, '127.0.0.1', () => {
     console.log(`work-hub e2e [${name}] http://127.0.0.1:${port}`);

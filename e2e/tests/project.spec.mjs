@@ -123,7 +123,14 @@ test('jobs land in the group their progress.json puts them in', async ({ page })
 test('a job row shows its id, status, step and AC progress', async ({ page }) => {
   const row = jobRow(page, 'A job touched today');
   await expect(row).toHaveCount(1);
-  await expect(row.locator('td[data-label="Job"]')).toHaveText('2026-08-29-worked-today');
+  // One Job / Title cell: the id on the first line, the title under it.
+  const cell = row.locator('td[data-label="Job / Title"]');
+  await expect(cell).toHaveCount(1);
+  await expect(cell.locator('.cell-job__id')).toHaveText('2026-08-29-worked-today');
+  await expect(cell.locator('.cell-job__title')).toHaveText('A job touched today');
+  await expect(row.locator('td[data-label="Job"]')).toHaveCount(0);
+  await expect(row.locator('td[data-label="Title"]')).toHaveCount(0);
+  await expect(page.locator('table.table--stack thead th', { hasText: /^Job \/ Title$/ }).first()).toBeAttached();
   await expect(row.locator('td[data-label="Status"] .badge')).toHaveText('in_progress');
   await expect(row.locator('td[data-label="Step"]')).toHaveText('build');
   await expect(row.locator('td[data-label="AC"]')).toHaveText('1 pass / 3 total · 1 implemented');

@@ -21,6 +21,13 @@ export function saveConfig(patch) {
     });
 }
 
+/** { required, pinSet, via, idleMinutes } - through api() so the token goes along and `via` comes back. */
+export function loadAuthStatus() {
+  return api('/api/auth/status').then(function (a) { state.auth = a; return a; }).catch(function () {
+    state.auth = null;
+  });
+}
+
 export function loadUsage() {
   return api('/api/usage').then(function (u) { state.usage = u; }).catch(function (err) {
     state.usage = { ok: false, error: err.message, fetchedAt: 0 };

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 import { goto, projectId, detail, jobRow } from '../support/app.mjs';
-import { RESOLVED_JOB } from '../support/env.mjs';
+import { RESOLVED_JOB, AWAITING_VERIFY_JOB } from '../support/env.mjs';
 
 async function openJob(page, title) {
   await goto(page, '#/');
@@ -30,6 +30,27 @@ test('the fixed header shows the meta pairs and the workflow track', async ({ pa
   await expect(steps.nth(0).locator('.badge')).toHaveText('done');
   await expect(steps.nth(2)).toContainText('build');
   await expect(steps.nth(2).locator('.badge')).toHaveText('in_progress');
+});
+
+test('each workflow step shows when it started and ended, and how long it took', async ({ page }) => {
+  await openJob(page, 'A job touched today');
+  const steps = page.locator('#detailWorkflow .wf-step');
+
+  // Both stamps: `<start> → <end> (<elapsed>)`. The clock text is local time,
+  // so the assertion is on the shape and the elapsed part, not the digits.
+  const plan = steps.nth(1).locator('.wf-step__time');
+  await expect(plan).toHaveCount(1);
+  await expect(plan).toContainText('→');
+  await expect(plan).toContainText('(35m)');
+  await expect(steps.nth(0).locator('.wf-step__time')).toContainText('(2m)');
+
+  // Only startedAt: `started <stamp>`.
+  const build = steps.nth(2).locator('.wf-step__time');
+  await expect(build).toContainText(/^started /);
+  await expect(build).not.toContainText('→');
+
+  // Neither: nothing extra is rendered.
+  await expect(steps.nth(3).locator('.wf-step__time')).toHaveCount(0);
 });
 
 test('every tab carries its own count and swaps the visible panel', async ({ page }) => {
@@ -237,5 +258,83 @@ test.describe('Resolve', () => {
     const d = detail(page);
     await expect(d.resolveLabel).toHaveText('Resolved');
     await expect(d.resolve).toBeDisabled();
+  });
+});
+
+/* Verified opens a real PowerShell window on the server's desktop, so every
+   test here intercepts the POST and answers it itself - nothing is spawned. */
+test.describe('Verified', () => {
+  test('is shown only while human-verification is in_progress', async ({ page }) => {
+    await openJob(page, AWAITING_VERIFY_JOB.title);
+    const d = detail(page);
+    await expect(d.verified).toBeVisible();
+    await expect(d.verifiedLabel).toHaveText('Verified');
+
+    await page.keyboard.press('Escape');
+    await jobRow(page, 'A job touched today').click();
+    await expect(d.verified).toBeHidden();
+
+    await page.keyboard.press('Escape');
+    await jobRow(page, RESOLVED_JOB.title).click();
+    await expect(d.verified).toBeHidden();
+  });
+
+  test('one click posts once, the human-verification box shows it running, and the job reloads when the window closes', async ({ page }) => {
+    const posts = [];
+    let running = true;
+    await page.route('**/verify', async (route) => {
+      const method = route.request().method();
+      if (method === 'POST') {
+        posts.push(route.request().url());
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ folder: AWAITING_VERIFY_JOB.folder, command: 'claude -p ...', cwd: 'x', running: true }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ folder: AWAITING_VERIFY_JOB.folder, known: true, running, exitCode: running ? null : 0 }) });
+    });
+    await openJob(page, AWAITING_VERIFY_JOB.title);
+    const d = detail(page);
+    const hvStep = page.locator('#detailWorkflow .wf-step', { hasText: 'human-verification' });
+
+    await d.verified.click();
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatch(new RegExp(`/api/projects/[^/]+/jobs/${AWAITING_VERIFY_JOB.folder}/verify$`));
+
+    // While the window is open: button busy, the step box carries a spinner.
+    await expect(d.verifiedLabel).toHaveText('Verifying…');
+    await expect(d.verified).toBeDisabled();
+    await expect(hvStep).toHaveClass(/is-busy/);
+    await expect(hvStep.locator('.wf-step__busy')).toContainText('verifying');
+    await expect(hvStep.locator('.spinner')).toBeVisible();
+
+    // The window closes: the job is reloaded. The fixture file was not
+    // touched, so the step is still in_progress and the button says so.
+    const reloads = [];
+    page.on('request', (r) => { if (/\/jobs$/.test(new URL(r.url()).pathname)) reloads.push(r.url()); });
+    running = false;
+    await expect(d.verifiedLabel).toHaveText('Not verified - retry', { timeout: 8_000 });
+    expect(reloads.length).toBeGreaterThanOrEqual(1);
+    await expect(hvStep).not.toHaveClass(/is-busy/);
+    await expect(hvStep.locator('.wf-step__busy')).toHaveCount(0);
+    await expect(d.verified).toBeEnabled();
+    await expect(d.verified).toHaveAttribute('title', /exit code 0/);
+    await expect(d.overlay).toHaveClass(/is-open/);
+  });
+
+  test('a failure shows the server message and can be retried', async ({ page }) => {
+    let calls = 0;
+    await page.route('**/verify', async (route) => {
+      calls++;
+      await route.fulfill({ status: 501, contentType: 'application/json', body: JSON.stringify({ error: 'Opening a verify run is implemented for Windows only' }) });
+    });
+    await openJob(page, AWAITING_VERIFY_JOB.title);
+    const d = detail(page);
+
+    await d.verified.click();
+    await expect(d.verifiedLabel).toHaveText('Failed - retry');
+    await expect(d.verified).toHaveAttribute('title', /Windows only/);
+    await expect(d.verified).toBeEnabled();
+
+    await d.verified.click();
+    await expect.poll(() => calls).toBe(2);
   });
 });

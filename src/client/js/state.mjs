@@ -5,6 +5,7 @@ export const state = {
   route: { name: 'dashboard' },
   dashboard: null,
   config: null,
+  auth: null,          // GET /api/auth/status: { required, pinSet, via, idleMinutes }
   usage: null,
   jobs: {},            // pid -> { today[], notStarted[], others[], unreadable[] }, loaded on demand
   sessions: {},        // pid -> { transcriptDir, sessions[] }

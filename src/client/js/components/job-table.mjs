@@ -23,8 +23,14 @@ function jobRow(job, showProject) {
   var live = job.activeReason ? '<span class="badge badge-info">' + esc(job.activeReason) + '</span>' : '';
   return '<tr data-project="' + esc(job.projectId) + '" data-folder="' + esc(job.folder) + '" tabindex="0">' +
     (showProject ? '<td class="cell-mono" data-label="Project">' + esc(job.projectName) + '</td>' : '') +
-    '<td class="cell-mono" data-label="Job">' + esc(idLabel) + '</td>' +
-    '<td class="cell-title" data-label="Title" title="' + esc(job.title || '(untitled)') + '">' + esc(job.title || '(untitled)') + '</td>' +
+    // One cell, two lines. The wrapper div is load-bearing on a phone: the
+    // stacked cell is a two-column grid whose first item is the ::before label,
+    // so two bare divs would put the title under the label instead of under
+    // the id. One wrapper keeps it `label | (id + title)`.
+    '<td class="cell-title" data-label="Job / Title"><div class="cell-job">' +
+      '<div class="cell-job__id cell-mono">' + esc(idLabel) + '</div>' +
+      '<div class="cell-job__title" title="' + esc(job.title || '(untitled)') + '">' + esc(job.title || '(untitled)') + '</div>' +
+    '</div></td>' +
     '<td data-label="Status">' + badge(job.status, STATUS_COLORS) + '</td>' +
     '<td class="cell-mono" data-label="Step">' + esc(job.currentStep || '—') + '</td>' +
     '<td class="cell-mono" data-label="AC">' + esc(acText(job)) + '</td>' +
@@ -44,11 +50,11 @@ export function jobTable(title, subtitle, jobs, badgeClass, showProject, emptyTe
   // auto-layout shrinks Title to its truncated content and the long titles
   // are unreadable.
   var cols = (showProject ? '<col style="width:150px">' : '') +
-    '<col style="width:90px"><col><col style="width:120px"><col style="width:170px"><col style="width:210px"><col style="width:150px">';
+    '<col><col style="width:120px"><col style="width:170px"><col style="width:210px"><col style="width:150px">';
   return '<div class="card mb-5">' + head +
     '<div class="table-wrap"><table class="table table--stack table--rows-clickable"><colgroup>' + cols + '</colgroup><thead><tr>' +
     (showProject ? '<th>Project</th>' : '') +
-    '<th>Job</th><th>Title</th><th>Status</th><th>Step</th><th>AC progress</th><th>Activity</th>' +
+    '<th>Job / Title</th><th>Status</th><th>Step</th><th>AC progress</th><th>Activity</th>' +
     '</tr></thead><tbody>' + filtered.map(function (j) { return jobRow(j, showProject); }).join('') + '</tbody></table></div></div>';
 }
 

@@ -96,7 +96,11 @@ A code is single use - the counter it verified against is remembered and refused
 
 The secret lives in `~/.work-hub/totp.json`, **not** in a `.env` in this repo - this repo gets committed, and a secret that can start `claude` under your account should not be one `git add -A` from being pushed. `enroll.mjs` writes it 0600 and never opens a socket: the QR is drawn in the terminal by [qr.mjs](src/lib/qr.mjs) precisely so the secret is never handed to a QR service.
 
-Anyone who reaches the port and can produce a code can read every file under your `.work/` folders, read every Claude Code transcript for the monitored projects, start new Claude runs, and **open a terminal window on the machine running the server** - the Terminal button is a `POST` that spawns `cmd /c start`, so a console appears on your desktop running `claude remote-control --spawn same-dir`, which then accepts work from claude.ai and the mobile app. Treat the phone holding that pairing like an SSH key.
+**A 6 digit PIN is a second way in**, set from Settings once you're already signed in with the authenticator code - `PUT /api/auth/pin` only accepts a `via: 'otp'` session, so a PIN session can never mint or replace another PIN. It is stored hashed (scrypt) plus a random salt in `~/.work-hub/pin.json`, next to `totp.json`, 0600, never in the repo; the hash is not what makes a six digit PIN safe, the throttle is - the same 5-wrong/60-second lockout as the code, but on its own counter, so a run of wrong PINs never locks out the authenticator exchange and a run of wrong codes never locks out the PIN. `POST /api/auth/pin` trades a correct PIN for a session token exactly like `/api/auth/otp` does, just marked `via: 'pin'`.
+
+**The page locks itself after 10 minutes idle** (no keyboard, pointer, or touch activity) on a gated server: the session is revoked server-side with `POST /api/auth/lock`, the token is dropped from `localStorage`, and the sign-in prompt reopens - PIN by default when one is set, with a link back to the authenticator code. Unlocking continues the page in place, no reload.
+
+Anyone who reaches the port and can produce a code can read every file under your `.work/` folders, read every Claude Code transcript for the monitored projects, start new Claude runs, and **open a terminal window on the machine running the server** - the Terminal button is a `POST` that spawns `cmd /c start`, so a console appears on your desktop running `claude remote-control --spawn same-dir`, which then accepts work from claude.ai and the mobile app. Treat the phone holding that pairing like an SSH key. The same pairing can also launch a headless `claude -p` run in a console: the Verified button's route runs `claude -p '/mynrd-flow:mynrd-verified .work\<folder>'` on the server's desktop for one job folder at a time.
 
 The message you type is never an argument. On Windows `claude` resolves to `claude.cmd`, which Node will only spawn with `shell: true`, and with `shell: true` Node does not escape argv. So every argument is an allowlisted token or a UUID matched against a regex, and the message itself goes over the child's stdin.
 
@@ -146,6 +150,7 @@ src/enroll.mjs           terminal app: prints the QR, confirms a code, writes th
 src/lib/totp.mjs         RFC 4226/6238 TOTP, base32, the otpauth:// URI
 src/lib/qr.mjs           QR encoder (byte mode, level M, versions 1-10) and the terminal render
 src/lib/authstore.mjs    ~/.work-hub/totp.json, and the in-memory session tokens
+src/lib/pinstore.mjs     ~/.work-hub/pin.json - the PIN sign-in, hashed with scrypt
 src/client/index.html    the page shell: icon sprite, topbar, the two dialogs. Markup only
 src/client/styles/       tokens.css, layout.css, components.css, views.css, responsive.css
 src/client/js/           ES modules, loaded by the browser directly - no build step
@@ -273,14 +278,18 @@ Work Hub launches it and forgets it: no run is registered, no output is captured
 |---|---|---|
 | GET | `/` | `src/client/index.html` - always served, gate or no gate, so the code can be typed |
 | GET | `/styles/*.css`, `/js/**/*.mjs` | the page's own assets, from `src/client/` only. Ungated for the same reason as `/` |
-| GET | `/api/auth/status` | `{ required, authenticated, digits, periodSeconds }` - ungated |
+| GET | `/api/auth/status` | `{ required, authenticated, digits, periodSeconds, pinSet, via, idleMinutes }` - ungated |
 | POST | `/api/auth/otp` | `{ token, expiresAt }` for a live 6 digit code; 401 wrong or replayed, 429 locked out. Ungated - it is the way in |
+| POST | `/api/auth/pin` | `{ token, expiresAt }` for a live 6 digit PIN (`via: 'pin'`); 401 wrong, 429 locked out on its own counter, 404 when ungated or no PIN is set. Ungated - also a way in |
+| PUT | `/api/auth/pin` | sets or replaces the PIN; 204. Needs a `via: 'otp'` session - 403 from a PIN session, 401 with none, 400 on a non-6-digit body, 404 when ungated |
+| POST | `/api/auth/lock` | revokes the calling session; 204. 401 with no live token, 404 when ungated |
 | GET / PUT | `/api/config` | the config; PUT validates every path with `statSync().isDirectory()` |
 | GET | `/api/dashboard` | `{ projects[] }` - id, path, name, `missing`, `hasWorkDir`. Two `statSync` calls per folder, nothing else |
 | GET | `/api/projects/:pid/jobs` | `{ today[], notStarted[], others[], unreadable[] }` for that one folder - the `.work` scan, on demand, no cache |
 | POST | `/api/projects/:pid/terminal` | opens a console on the **server's** desktop running `claude remote-control --spawn same-dir --remote-control-session-name-prefix "<computer name> - <folder name>"` |
 | GET | `/api/projects/:pid/jobs/:folder/md/:file` | one `.md` rendered to HTML |
 | POST | `/api/projects/:pid/jobs/:folder/resolve` | marks the job's workflow done **in its `progress.json`** |
+| POST | `/api/projects/:pid/jobs/:folder/verify` | opens a console on the **server's** desktop running `claude -p '/mynrd-flow:mynrd-verified .work\<folder>' --model opus --effort high`; 404/409/501 (no window) when the job or its `human-verification` step isn't ready |
 | GET | `/api/projects/:pid/sessions` | session summaries |
 | POST | `/api/projects/:pid/sessions` | `{ runId }` - new conversation |
 | GET | `/api/projects/:pid/sessions/:sid` | the parsed chat |
@@ -291,9 +300,9 @@ Work Hub launches it and forgets it: no run is registered, no output is captured
 
 `:pid` is the encoded folder name, resolved back to a path from the config on every request - a path is never accepted from a URL, and an id that is not configured is a 404. Job folder and file segments are rejected if they still contain a separator after decoding, only `.md` is served, and the resolved path must stay under that project's `.work/`. JSON bodies are capped at 256 KB (413 past that). Static requests are resolved against `src/client/` and then checked as a resolved path - a percent-encoded `..` that normalises outside the folder is a 404, not a read - and an extension the server has no content type for is never served at all.
 
-Only `PUT /api/config`, the two POST run routes, `/api/usage/refresh`, `/api/projects/:pid/terminal` and `/api/projects/:pid/jobs/:folder/resolve` change anything. Everything else is read-only.
+Only `PUT /api/config`, the two POST run routes, `/api/usage/refresh`, `/api/projects/:pid/terminal`, `/api/projects/:pid/jobs/:folder/resolve`, `PUT /api/auth/pin` and `POST /api/auth/lock` change anything. Everything else is read-only.
 
-`resolve` is the single route that writes into a monitored folder - see below. Otherwise the only files Work Hub writes are `~/.work-hub/config.json`, `~/.work-hub/totp.json` (by `enroll.mjs`, never by the server), and whatever `claude` itself writes.
+`resolve` is the single route that writes into a monitored folder - see below. Otherwise the only files Work Hub writes are `~/.work-hub/config.json`, `~/.work-hub/totp.json` (by `enroll.mjs`, never by the server), `~/.work-hub/pin.json` (by `PUT /api/auth/pin`), and whatever `claude` itself writes.
 
 ---
 

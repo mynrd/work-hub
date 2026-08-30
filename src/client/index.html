@@ -82,6 +82,9 @@
         <p id="detailSubline"></p>
       </div>
       <div class="row gap-2">
+        <button type="button" class="btn btn-secondary btn-sm" id="detailVerifiedBtn" hidden title="Open a PowerShell window running /mynrd-flow:mynrd-verified for this job">
+          <svg class="icon icon-sm"><use href="#i-check"/></svg> <span id="detailVerifiedLabel">Verified</span>
+        </button>
         <button type="button" class="btn btn-secondary btn-sm" id="detailResolveBtn" title="Mark every workflow step done in this job's progress.json">
           <svg class="icon icon-sm"><use href="#i-check"/></svg> <span id="detailResolveLabel">Resolve</span>
         </button>
@@ -137,13 +140,17 @@
 <!-- One-time code prompt (only ever shown after a 401) -->
 <div class="overlay" id="otpOverlay" role="dialog" aria-modal="true" aria-labelledby="otpTitle">
   <div class="modal modal--sm">
-    <div class="modal__head"><div><h3 id="otpTitle">Enter your code</h3><p>Open your authenticator and type the 6 digit code it shows for Work Hub. A correct code signs this browser in for 12 hours.</p></div></div>
+    <div class="modal__head"><div><h3 id="otpTitle">Enter your code</h3><p id="otpDesc">Open your authenticator and type the 6 digit code it shows for Work Hub. A correct code signs this browser in for 12 hours.</p></div></div>
     <div class="modal__body">
       <input class="input" id="otpInput" type="text" inputmode="numeric" autocomplete="one-time-code"
              maxlength="6" placeholder="000000" aria-describedby="otpError"
              style="width:100%; font-family: var(--font-mono); font-size: 22px; letter-spacing: .4em; text-align: center" />
       <p id="otpError" class="term-status is-error" style="padding:0; min-height:1.2em" role="alert"></p>
-      <div class="row gap-2"><button type="button" class="btn btn-primary" id="otpSubmitBtn">Sign in</button></div>
+      <div class="row gap-3 wrap" style="align-items:center">
+        <button type="button" class="btn btn-primary" id="otpSubmitBtn">Sign in</button>
+        <!-- Only shown when a PIN exists: swaps the prompt between PIN and authenticator code. -->
+        <a href="#" class="fs-sm" id="otpModeLink" hidden>Use PIN</a>
+      </div>
     </div>
   </div>
 </div>

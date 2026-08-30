@@ -59,6 +59,125 @@ export function sessionNamePrefix(projectPath, { hostname = os.hostname() } = {}
   return parts.join(' - ').slice(0, 80).trim();
 }
 
+// ── Verified button ──────────────────────────────────────────────────────────
+//
+// Opens a second, unrelated kind of window: a headless `claude -p` run of the
+// `/mynrd-flow:mynrd-verified` command against one job folder, e.g.:
+//
+//   claude -p '/mynrd-flow:mynrd-verified .work\2026-08-30-some-job' --model opus --effort high
+//
+// Same `cmd /c start` launcher as `openTerminal`, but the window closes when
+// the run ends (no `-NoExit`) - it exists to run one command, not to be used;
+// deliberately NOT folded into one function with a mode flag - the two
+// commands only share that prefix.
+//
+// Security: the folder name is the ONLY non-literal token on the command
+// line, and it must match `^[A-Za-z0-9._-]+$` before it goes anywhere near
+// one. That string crosses two parsers on its way to `claude` - cmd.exe's
+// `start`, then PowerShell's `-Command` argument - so every character that
+// either of those treats specially (`&`, `|`, `%`, `!`, `$`, `;`, backtick,
+// quotes, spaces) must be impossible in the input, not escaped in the output.
+// A folder that fails the regex is rejected outright; it is never quoted or
+// sanitised, because there is no quoting scheme that is provably safe against
+// both parsers at once. Every real folder here is `<date>-<slug>` (slug rule
+// in mynrd-intake), which always matches. Model and effort are fixed literals
+// - never read from config - because the point of this button is a
+// consistent verification run regardless of the composer's settings. The
+// project path travels only as `cwd`, never as an argument, same as
+// `openTerminal`.
+//
+// Quoting proof (done by hand on this machine, recorded here because it is
+// the thing most likely to silently break on a Windows update): the same
+// argv shape was run with `node -e` standing in for `claude` and without
+// `start` (so it runs inline and stdout is capturable):
+//   cmd.exe /c powershell.exe -Command "node -e '...' -- -p '/mynrd-flow:mynrd-verified .work\some-folder' --model opus --effort high"
+// came back as
+//   ["-p","/mynrd-flow:mynrd-verified .work\\some-folder","--model","opus","--effort","high"]
+// - the prompt is one argument, the single quotes are gone, and the
+// backslash before the folder name survives. Plain `-Command` with a single
+// string is enough; `-EncodedCommand` was not needed.
+
+/** Folder name shape that is safe to place, unquoted, inside the PowerShell command. */
+const VERIFY_FOLDER_RE = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Launches a headless `claude -p '/mynrd-flow:mynrd-verified .work\<folder>'`
+ * run in a new PowerShell console. Checks the folder name, that the job
+ * folder exists, and that its workflow has a `human-verification` step
+ * `in_progress`, before spawning anything.
+ *
+ * @returns {{ ok: true, command: string, cwd: string } | { ok: false, status: number, error: string }}
+ */
+export function openVerifyTerminal(projectPath, folder, { spawnFn = spawn, platform = process.platform, onExit = null } = {}) {
+  const claudeCommand = (f) => `claude -p '/mynrd-flow:mynrd-verified .work\\${f}' --model opus --effort high`;
+
+  if (platform !== 'win32') {
+    return { ok: false, status: 501, error: `Opening a verify run is implemented for Windows only (this server is on ${platform}). Run \`${claudeCommand(folder)}\` in ${projectPath} yourself.` };
+  }
+
+  if (typeof folder !== 'string' || !VERIFY_FOLDER_RE.test(folder)) {
+    return { ok: false, status: 400, error: `Invalid job folder name: ${JSON.stringify(folder)}` };
+  }
+
+  const workRoot = path.resolve(projectPath, '.work');
+  const folderPath = path.resolve(workRoot, folder);
+  if (!folderPath.startsWith(workRoot + path.sep)) {
+    return { ok: false, status: 400, error: 'Resolved path escapes the .work root' };
+  }
+
+  const file = path.join(folderPath, 'progress.json');
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    return { ok: false, status: 404, error: `Cannot read ${folder}/progress.json: ${err.code ?? err.message}` };
+  }
+
+  let progress;
+  try {
+    progress = JSON.parse(raw);
+  } catch (err) {
+    return { ok: false, status: 409, error: `${folder}/progress.json is not valid JSON: ${err.message}` };
+  }
+
+  const workflow = progress && typeof progress === 'object' && Array.isArray(progress.workflow) ? progress.workflow : [];
+  const inProgress = workflow.some((s) => s && typeof s === 'object' && s.step === 'human-verification' && s.status === 'in_progress');
+  if (!inProgress) {
+    return { ok: false, status: 409, error: `${folder} has no human-verification step in_progress.` };
+  }
+
+  const command = claudeCommand(folder);
+  const title = `Work Hub - verified ${folder}`;
+  // No `-NoExit`: the window is there to run one command and go away. The
+  // run's own output lands in the job's progress.json, which the page shows.
+  // `start /wait` keeps the launcher `cmd.exe` alive until that window closes,
+  // which is what lets `onExit` fire when the run is actually over - the page
+  // polls for that and reloads the job.
+  const args = ['/c', 'start', title, '/wait', 'powershell.exe', '-Command', command];
+
+  let child;
+  try {
+    child = spawnFn('cmd.exe', args, {
+      cwd: projectPath,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+      shell: false,
+    });
+  } catch (err) {
+    return { ok: false, status: 500, error: `Could not start the verify run: ${err.message}` };
+  }
+
+  child.on?.('error', (err) => {
+    console.error(`Verify launch failed for ${projectPath}/${folder}: ${err.message}`);
+    onExit?.(null);
+  });
+  child.on?.('exit', (code) => { onExit?.(code); });
+  child.unref?.();
+
+  return { ok: true, command, cwd: projectPath };
+}
+
 /**
  * Launches the terminal. Returns synchronously - `start` exits as soon as the
  * new console exists, so there is no exit code worth waiting for.

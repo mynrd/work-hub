@@ -75,8 +75,8 @@ test('a session token is 256 bits, unique, and only valid until it expires', () 
   assert.notEqual(a.token, b.token);
   assert.equal(a.expiresAt, now + 1000);
 
-  assert.equal(sessions.validate(a.token, now), true);
-  assert.equal(sessions.validate(a.token, now + 999), true);
+  assert.deepEqual(sessions.validate(a.token, now), { via: 'otp', expiresAt: a.expiresAt });
+  assert.deepEqual(sessions.validate(a.token, now + 999), { via: 'otp', expiresAt: a.expiresAt });
   assert.equal(sessions.validate(a.token, now + 1000), false);
   assert.equal(sessions.size(now + 1000), 0, 'expired sessions are dropped, not just refused');
 });
@@ -87,7 +87,9 @@ test('a token that was never issued is refused, whatever shape it is', () => {
   for (const bad of ['', null, undefined, 42, {}, token + 'x', token.slice(0, -1), token.toUpperCase()]) {
     assert.equal(sessions.validate(bad), false, `accepted ${JSON.stringify(bad)}`);
   }
-  assert.equal(sessions.validate(token), true);
+  const live = sessions.validate(token);
+  assert.equal(live.via, 'otp');
+  assert.equal(typeof live.expiresAt, 'number');
 });
 
 test('revoking clears every browser at once', () => {
@@ -103,4 +105,31 @@ test('the default session lasts 12 hours', () => {
   assert.equal(SESSION_TTL_MS, 12 * 60 * 60 * 1000);
   const now = 1_700_000_000_000;
   assert.equal(createSessionStore().issue(now).expiresAt, now + SESSION_TTL_MS);
+});
+
+// ── AC 13: via and revoke ────────────────────────────────────────────────────
+
+test('AC 13: issue() with no via defaults to otp, keeping old callers working', () => {
+  const sessions = createSessionStore();
+  const { token } = sessions.issue();
+  assert.equal(sessions.validate(token).via, 'otp');
+});
+
+test('AC 13: issue({ via }) records otp or pin, and validate reports it back', () => {
+  const sessions = createSessionStore();
+  const otp = sessions.issue({ via: 'otp' });
+  const pin = sessions.issue({ via: 'pin' });
+  assert.equal(sessions.validate(otp.token).via, 'otp');
+  assert.equal(sessions.validate(pin.token).via, 'pin');
+});
+
+test('AC 13: revoke removes one token and reports whether it was there', () => {
+  const sessions = createSessionStore();
+  const a = sessions.issue();
+  const b = sessions.issue();
+  assert.equal(sessions.revoke(a.token), true);
+  assert.equal(sessions.validate(a.token), false);
+  assert.equal(sessions.validate(b.token) !== false, true, 'other sessions are untouched');
+  assert.equal(sessions.revoke(a.token), false, 'revoking twice reports nothing was there the second time');
+  assert.equal(sessions.revoke('never-issued'), false);
 });

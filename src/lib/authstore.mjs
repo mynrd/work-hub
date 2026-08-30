@@ -86,34 +86,53 @@ export function clearEnrollment(home = os.homedir()) {
  * left lying in a file.
  */
 export function createSessionStore({ ttlMs = SESSION_TTL_MS } = {}) {
-  const sessions = new Map(); // token -> expiresAt
+  const sessions = new Map(); // token -> { expiresAt, via }
 
   function sweep(now) {
-    for (const [token, expiresAt] of sessions) {
-      if (expiresAt <= now) sessions.delete(token);
+    for (const [token, record] of sessions) {
+      if (record.expiresAt <= now) sessions.delete(token);
     }
   }
 
   return {
-    issue(now = Date.now()) {
+    // `arg` is `{ via }` for a real caller, or (from before `via` existed) a
+    // bare `now` timestamp - both call shapes are kept working so nothing
+    // that already calls `issue(now)` has to change.
+    issue(arg, now = Date.now()) {
+      let via = 'otp';
+      if (typeof arg === 'number') {
+        now = arg;
+      } else if (arg && typeof arg === 'object') {
+        via = arg.via ?? 'otp';
+      }
       sweep(now);
       const token = crypto.randomBytes(32).toString('base64url');
       const expiresAt = now + ttlMs;
-      sessions.set(token, expiresAt);
+      sessions.set(token, { expiresAt, via });
       return { token, expiresAt };
     },
 
-    /** Constant-time across the whole set, so a token cannot be probed apart. */
+    /**
+     * Constant-time across the whole set, so a token cannot be probed apart.
+     * Returns a fresh `{ via, expiresAt }` for a live token, `false` otherwise -
+     * every current caller only truth-tests the result, which `false` still does.
+     */
     validate(given, now = Date.now()) {
       if (typeof given !== 'string' || !given) return false;
       sweep(now);
       const givenBuf = Buffer.from(given);
-      let hit = false;
-      for (const [token, expiresAt] of sessions) {
+      let hit = null;
+      for (const [token, record] of sessions) {
         const buf = Buffer.from(token);
-        if (buf.length === givenBuf.length && crypto.timingSafeEqual(buf, givenBuf) && expiresAt > now) hit = true;
+        if (buf.length === givenBuf.length && crypto.timingSafeEqual(buf, givenBuf) && record.expiresAt > now) hit = record;
       }
-      return hit;
+      return hit ? { via: hit.via, expiresAt: hit.expiresAt } : false;
+    },
+
+    /** Removes one token. Returns whether it was there. */
+    revoke(given) {
+      if (typeof given !== 'string' || !given) return false;
+      return sessions.delete(given);
     },
 
     revokeAll() {

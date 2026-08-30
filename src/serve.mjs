@@ -21,9 +21,10 @@ import { createUsageCache } from './lib/usage.mjs';
 import { createRunRegistry } from './lib/claude-run.mjs';
 import { resolveJob } from './lib/resolve-job.mjs';
 import { listBranches, listCommits, commitFiles, fileAtCommit, workingStatus, workingFile } from './lib/git.mjs';
-import { openTerminal } from './lib/terminal.mjs';
+import { openTerminal, openVerifyTerminal } from './lib/terminal.mjs';
 import { renderMarkdown } from './lib/markdown.mjs';
 import { loadEnrollment, createSessionStore, enrollmentPath } from './lib/authstore.mjs';
+import { loadPin, savePin, verifyPin } from './lib/pinstore.mjs';
 import { verifyTotp, STEP_SECONDS } from './lib/totp.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -80,6 +81,11 @@ function sendJson(res, status, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
   res.end(body);
+}
+
+function sendEmpty(res, status) {
+  res.writeHead(status, { 'Content-Length': 0 });
+  res.end();
 }
 
 function sendText(res, status, text, contentType = 'text/plain; charset=utf-8') {
@@ -162,6 +168,10 @@ function createOtpGuard({ maxFailures = OTP_MAX_FAILURES, lockoutMs = OTP_LOCKOU
       for (const c of used) if (c < floor) used.delete(c);
       failures = 0;
       return true;
+    },
+    /** Zeroes the failure count. For a PIN, which has no replay counter to `claim`. */
+    reset() {
+      failures = 0;
     },
   };
 }
@@ -340,12 +350,15 @@ export function createServer({
   otpSecret = null,
   home = undefined,
   runs = createRunRegistry(),
+  openVerify = openVerifyTerminal,
   usage = createUsageCache(),
   sessions = createSessionStore(),
+  idleMinutes = 10,
 } = {}) {
   const clientRoot = path.resolve(__dirname, 'client');
   const homeArgs = home === undefined ? [] : [home];
   const otpGuard = createOtpGuard();
+  const pinGuard = createOtpGuard();
 
   let config = loadConfig(...homeArgs);
   usage.setIntervalMinutes(config.usageIntervalMinutes);
@@ -442,6 +455,9 @@ export function createServer({
     sendJson(res, 200, { ...config, configPath: configPath(...homeArgs) });
   }
 
+  /** `<pid>/<folder>` -> the state of that job's verify window, while this process lives. */
+  const verifyRuns = new Map();
+
   /**
    * Trades a six digit code for a session token.
    *
@@ -477,6 +493,78 @@ export function createServer({
 
     const session = sessions.issue();
     sendJson(res, 200, { token: session.token, expiresAt: session.expiresAt });
+  }
+
+  /**
+   * Trades a six digit PIN for a session token.
+   *
+   * Same shape as `handleOtpExchange`, minus the replay guard: a PIN is not
+   * single-use, and its own guard (`pinGuard`) so wrong PINs never lock the
+   * code exchange, and vice versa.
+   */
+  async function handlePinExchange(req, res) {
+    const locked = pinGuard.lockedFor();
+    if (locked > 0) {
+      sendJson(res, 429, { error: `Too many wrong PINs. Try again in ${locked}s.`, retryAfterSeconds: locked });
+      return;
+    }
+
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (err) {
+      sendJson(res, err.tooLarge ? 413 : 400, { error: err.tooLarge ? err.message : `Invalid request body: ${err.message}` });
+      return;
+    }
+
+    const record = loadPin(...homeArgs);
+    if (!verifyPin(record, body?.pin)) {
+      pinGuard.fail();
+      sendJson(res, 401, { error: 'That PIN is not right.' });
+      return;
+    }
+    pinGuard.reset();
+
+    const session = sessions.issue({ via: 'pin' });
+    sendJson(res, 200, { token: session.token, expiresAt: session.expiresAt });
+  }
+
+  /** Sets or replaces the PIN. Requires a live session whose `via` is `otp`. */
+  async function handlePinPut(req, res, token) {
+    const session = sessions.validate(token);
+    if (!session) {
+      sendJson(res, 401, { error: 'Missing or expired session.' });
+      return;
+    }
+    if (session.via !== 'otp') {
+      sendJson(res, 403, { error: 'Sign in with your authenticator code to set a PIN.' });
+      return;
+    }
+
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (err) {
+      sendJson(res, err.tooLarge ? 413 : 400, { error: err.tooLarge ? err.message : `Invalid request body: ${err.message}` });
+      return;
+    }
+
+    try {
+      savePin(body?.pin, ...homeArgs);
+    } catch (err) {
+      sendJson(res, 400, { error: err.message });
+      return;
+    }
+    sendEmpty(res, 204);
+  }
+
+  /** Revokes the calling session so the next request needs a fresh sign-in. */
+  function handleLock(req, res, token) {
+    if (!sessions.revoke(token)) {
+      sendJson(res, 401, { error: 'Missing or expired session.' });
+      return;
+    }
+    sendEmpty(res, 204);
   }
 
   async function handleRunStart(req, res, projectPath, projectId, sessionId) {
@@ -518,11 +606,15 @@ export function createServer({
     // Whether a code is needed at all. The page reads this before it renders,
     // so an ungated loopback server never shows the prompt.
     if (pathname === '/api/auth/status' && req.method === 'GET') {
+      const session = otpSecret ? sessions.validate(req.headers['x-hub-token']) : false;
       sendJson(res, 200, {
         required: Boolean(otpSecret),
-        authenticated: !otpSecret || sessions.validate(req.headers['x-hub-token']),
+        authenticated: !otpSecret || Boolean(session),
         digits: 6,
         periodSeconds: STEP_SECONDS,
+        pinSet: Boolean(otpSecret && loadPin(...homeArgs)),
+        via: session ? session.via : null,
+        idleMinutes,
       });
       return;
     }
@@ -534,6 +626,14 @@ export function createServer({
       return;
     }
 
+    // Ungated on purpose, like /api/auth/otp - it is a way in. A PIN can only
+    // be exchanged when the server is gated and a PIN has been set.
+    if (pathname === '/api/auth/pin' && req.method === 'POST') {
+      if (!otpSecret || !loadPin(...homeArgs)) { sendJson(res, 404, { error: 'No PIN is set.' }); return; }
+      handlePinExchange(req, res);
+      return;
+    }
+
     // The page itself is always served so the code can be entered in the UI;
     // every other /api/* route needs the session token that code bought.
     //
@@ -542,6 +642,22 @@ export function createServer({
     // forces a CORS preflight, and nothing here answers one.
     if (otpSecret && pathname.startsWith('/api/') && !sessions.validate(req.headers['x-hub-token'])) {
       sendJson(res, 401, { error: 'Missing or expired session. Enter the 6 digit code from your authenticator.' });
+      return;
+    }
+
+    // These two need a live session already, so they sit after the gate above:
+    // a missing token is already a 401 by the time either handler runs.
+    if (pathname === '/api/auth/pin') {
+      if (!otpSecret) { sendJson(res, 404, { error: 'This server is not gated; there is nothing to set a PIN for.' }); return; }
+      if (req.method === 'PUT') { handlePinPut(req, res, req.headers['x-hub-token']); return; }
+      sendJson(res, 405, { error: 'Only POST and PUT are supported here' });
+      return;
+    }
+
+    if (pathname === '/api/auth/lock') {
+      if (!otpSecret) { sendJson(res, 404, { error: 'This server is not gated; there is no session to lock.' }); return; }
+      if (req.method !== 'POST') { sendJson(res, 405, { error: 'Only POST is supported here' }); return; }
+      handleLock(req, res, req.headers['x-hub-token']);
       return;
     }
 
@@ -651,6 +767,40 @@ export function createServer({
         const result = resolveJob(projectPath, folder);
         if (!result.ok) { sendJson(res, result.status, { error: result.error }); return; }
         sendJson(res, 200, { folder, workflow: result.workflow, added: result.added });
+        return;
+      }
+
+      // /api/projects/:pid/jobs/:folder/verify - POST opens a headless
+      // `claude -p` verification run on the server's desktop; GET says whether
+      // that window is still open. The page polls GET and reloads the job when
+      // the run ends. Memory only, like sessions: a restart forgets a run, and
+      // GET then answers `known: false`, which the page treats as "ended".
+      if (parts[1] === 'jobs' && parts[3] === 'verify' && parts.length === 4 && (req.method === 'POST' || req.method === 'GET')) {
+        const folder = decodeSegment(parts[2]);
+        if (!folder) { sendJson(res, 400, { error: 'Invalid job folder segment' }); return; }
+        const key = `${pid}/${folder}`;
+        const current = verifyRuns.get(key) || null;
+
+        if (req.method === 'GET') {
+          sendJson(res, 200, current ? { ...current } : { folder, known: false, running: false });
+          return;
+        }
+
+        if (current && current.running) {
+          sendJson(res, 409, { error: `A verify run for ${folder} is already open. Finish or close that window first.` });
+          return;
+        }
+        const record = { folder, known: true, running: true, startedAt: Date.now(), endedAt: null, exitCode: null };
+        const result = openVerify(projectPath, folder, {
+          onExit: (code) => {
+            record.running = false;
+            record.endedAt = Date.now();
+            record.exitCode = typeof code === 'number' ? code : null;
+          },
+        });
+        if (!result.ok) { sendJson(res, result.status, { error: result.error }); return; }
+        verifyRuns.set(key, record);
+        sendJson(res, 200, { folder, command: result.command, cwd: result.cwd, running: true });
         return;
       }
 
@@ -804,6 +954,9 @@ function main() {
       console.log('');
       console.log(`Sign in: the page asks for the 6 digit code your authenticator shows for ${enrollment.account}.`);
       console.log('A correct code buys a 12 hour session. Restarting this server ends every session.');
+      let pinSet = false;
+      try { pinSet = Boolean(loadPin()); } catch { pinSet = false; }
+      if (pinSet) console.log('A PIN is also set: it signs in the same way, and only an authenticator session can change it.');
     } else if (enrollment) {
       console.log('');
       console.warn('--no-otp: every /api/* route is open to anything that can reach 127.0.0.1, this browser included.');

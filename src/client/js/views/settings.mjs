@@ -3,8 +3,55 @@
 
 import { esc, emptyState, errorCard } from '../dom.mjs';
 import { state } from '../state.mjs';
-import { loadConfig, saveConfig } from '../data.mjs';
+import { loadConfig, saveConfig, loadAuthStatus } from '../data.mjs';
+import { api } from '../api.mjs';
 import { app, registerView, renderCurrentPage, setApp } from '../render.mjs';
+
+// The Sign-in PIN card. Only a gated server has one to set, and only a session
+// that was opened with the authenticator code may set it - a PIN session sees
+// the card disabled with the reason.
+function renderPinCard(auth) {
+  if (!auth || !auth.required) return '';
+  var viaPin = auth.via === 'pin';
+  var dis = viaPin ? ' disabled' : '';
+  return '<div class="card mt-5" id="pinCard"><div class="card__head"><div><h3>Sign-in PIN</h3>' +
+      '<p>A 6 digit PIN as a second way in, beside your authenticator code. After 10 minutes idle the page locks and asks for it.</p></div>' +
+      '<span class="badge ' + (auth.pinSet ? 'badge-success' : 'badge-neutral') + '" id="pinState">' + (auth.pinSet ? 'A PIN is set' : 'No PIN yet') + '</span></div>' +
+    '<div class="card__body col gap-4">' +
+      (viaPin ? '<p class="fs-sm muted" id="pinLocked">Sign in with your authenticator code to change the PIN.</p>' : '') +
+      '<div class="row gap-3 wrap field-row">' +
+        '<div class="col gap-2"><label class="fs-xs muted" for="pinNew">' + (auth.pinSet ? 'New PIN' : 'PIN') + '</label>' +
+          '<input class="input" id="pinNew" type="password" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="000000"' + dis + ' /></div>' +
+        '<div class="col gap-2"><label class="fs-xs muted" for="pinConfirm">Confirm</label>' +
+          '<input class="input" id="pinConfirm" type="password" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="000000"' + dis + ' /></div>' +
+      '</div>' +
+      '<div id="pinError" class="fs-sm" style="color:var(--danger-fg)" hidden></div>' +
+      '<div class="row gap-2"><button type="button" class="btn btn-primary" id="savePinBtn"' + dis + '>Save PIN</button><span class="fs-sm muted" id="pinSaved" hidden>PIN set</span></div>' +
+    '</div></div>';
+}
+
+function wirePinCard() {
+  var saveBtn = document.getElementById('savePinBtn');
+  if (!saveBtn) return;
+  var errorEl = document.getElementById('pinError');
+  function showError(message) { errorEl.textContent = message; errorEl.hidden = !message; }
+  saveBtn.addEventListener('click', function () {
+    var pin = document.getElementById('pinNew').value;
+    var confirm = document.getElementById('pinConfirm').value;
+    if (!/^\d{6}$/.test(pin)) { showError('A PIN is exactly 6 digits.'); return; }
+    if (pin !== confirm) { showError('The two PINs do not match.'); return; }
+    showError('');
+    saveBtn.disabled = true;
+    api('/api/auth/pin', { method: 'PUT', body: JSON.stringify({ pin: pin }) })
+      .then(function () { return loadAuthStatus(); })
+      .then(function () {
+        renderSettings();
+        var note = document.getElementById('pinSaved');
+        if (note) { note.hidden = false; setTimeout(function () { note.hidden = true; }, 2000); }
+      })
+      .catch(function (err) { saveBtn.disabled = false; showError(err.message); });
+  });
+}
 
 function renderSettings() {
   var c = state.config;
@@ -41,8 +88,10 @@ function renderSettings() {
           '<div class="col gap-2"><label class="fs-xs muted" for="defInterval">Usage refresh (min, 0 = manual)</label><input class="input" id="defInterval" type="number" min="0" step="1" value="' + esc(c.usageIntervalMinutes) + '" /></div>' +
         '</div>' +
         '<div class="row gap-2"><button type="button" class="btn btn-primary" id="saveDefaultsBtn">Save</button><span class="fs-sm muted" id="defaultsSaved" hidden>Saved.</span></div>' +
-      '</div></div>'
+      '</div></div>' +
+    renderPinCard(state.auth)
   );
+  wirePinCard();
 
   var errorEl = document.getElementById('settingsError');
   function showError(message) { errorEl.textContent = message; errorEl.hidden = !message; }
@@ -86,6 +135,9 @@ function renderSettings() {
 
 function enterSettings() {
   (state.config ? Promise.resolve() : loadConfig()).then(renderCurrentPage);
+  // Always re-read: whether a PIN exists and how this session signed in can
+  // both change without a reload.
+  loadAuthStatus().then(renderCurrentPage);
   renderCurrentPage();
 }
 

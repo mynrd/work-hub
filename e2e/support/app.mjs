@@ -53,6 +53,8 @@ export const detail = (page) => ({
   read: page.locator('#mdReadBtn'),
   resolve: page.locator('#detailResolveBtn'),
   resolveLabel: page.locator('#detailResolveLabel'),
+  verified: page.locator('#detailVerifiedBtn'),
+  verifiedLabel: page.locator('#detailVerifiedLabel'),
   tab: (id) => page.locator(`#detailTabs .tab[data-tab="${id}"]`),
   panel: (id) => page.locator(`#panel-${id}`),
 });

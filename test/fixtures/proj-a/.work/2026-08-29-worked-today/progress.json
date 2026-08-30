@@ -13,9 +13,9 @@
     "duplicateCheck": { "terms": ["thing"], "candidates": [] }
   },
   "workflow": [
-    { "step": "intake", "status": "done" },
-    { "step": "plan", "status": "done" },
-    { "step": "build", "status": "in_progress" },
+    { "step": "intake", "status": "done", "startedAt": "2026-08-29T01:00:00+08:00", "endedAt": "2026-08-29T01:02:30+08:00" },
+    { "step": "plan", "status": "done", "startedAt": "2026-08-29T01:05:00+08:00", "endedAt": "2026-08-29T01:40:00+08:00" },
+    { "step": "build", "status": "in_progress", "startedAt": "2026-08-29T02:00:00+08:00" },
     { "step": "human-verification", "status": "pending" }
   ],
   "tasks": [{ "id": "T1", "title": "First task", "state": "done", "commits": ["abc1234"] }],

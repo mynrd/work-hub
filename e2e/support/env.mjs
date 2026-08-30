@@ -48,6 +48,29 @@ export const RESOLVED_JOB = {
   },
 };
 
+/** Added by this harness: build done, human-verification in_progress - the one
+ *  state that renders the Verified button. Backdated into "Others". */
+export const AWAITING_VERIFY_JOB = {
+  folder: '2020-06-06-awaiting-verify',
+  title: 'Green and awaiting verification',
+  progress: {
+    schemaVersion: 3,
+    id: '2020-06-06-awaiting-verify',
+    title: 'Green and awaiting verification',
+    type: 'task',
+    status: 'green',
+    workflow: [
+      { step: 'intake', status: 'done' },
+      { step: 'plan', status: 'done' },
+      { step: 'build', status: 'done' },
+      { step: 'human-verification', status: 'in_progress', startedAt: '2020-06-06T10:00:00+08:00' },
+    ],
+    acceptanceCriteria: [{ id: 1, text: 'It is green', status: 'pass' }],
+    humanVerification: { unlocked: true, unlockedAt: '2020-06-06T10:00:00+08:00' },
+    runs: [],
+  },
+};
+
 export const PORTS = { open: 5178, gated: 5179 };
 
 function copyDir(from, to) {
@@ -132,6 +155,11 @@ export function buildTestEnv() {
   // Written just now, so without this it would land in "Worked today" beside the
   // one job that is supposed to be there. Backdate it into "Others".
   touchTree(resolved, new Date('2020-05-05T00:00:00Z'));
+
+  const awaiting = path.join(projA, '.work', AWAITING_VERIFY_JOB.folder);
+  fs.mkdirSync(awaiting, { recursive: true });
+  fs.writeFileSync(path.join(awaiting, 'progress.json'), JSON.stringify(AWAITING_VERIFY_JOB.progress, null, 2));
+  touchTree(awaiting, new Date('2020-06-06T00:00:00Z'));
 
   seedGitRepo(projA);
 

@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process';
 import { parseArgs, createServer } from '../src/serve.mjs';
 import { generateSecret, totp, STEP_SECONDS } from '../src/lib/totp.mjs';
 import { loadConfig, saveConfig, configPath, encodeProjectId, resolveProjectId, validateProjectPath, normalizeConfig } from '../src/lib/config.mjs';
+import { savePin } from '../src/lib/pinstore.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(__dirname, 'fixtures');
@@ -293,11 +294,12 @@ test('AC 14: /api/auth/status says whether a code is needed, without needing one
   const secret = generateSecret();
   await withServer({ home, otpSecret: secret }, async (get) => {
     const gated = await (await get('/api/auth/status')).json();
-    assert.deepEqual(gated, { required: true, authenticated: false, digits: 6, periodSeconds: STEP_SECONDS });
+    assert.deepEqual(gated, { required: true, authenticated: false, digits: 6, periodSeconds: STEP_SECONDS, pinSet: false, via: null, idleMinutes: 10 });
 
     const token = (await (await postCode(get, totp(secret))).json()).token;
     const signedIn = await (await get('/api/auth/status', { headers: { 'X-Hub-Token': token } })).json();
     assert.equal(signedIn.authenticated, true);
+    assert.equal(signedIn.via, 'otp');
   });
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -307,7 +309,149 @@ test('AC 14: with no secret enrolled every /api/* route is open and the exchange
   await withServer({ home }, async (get) => {
     assert.equal((await get('/api/config')).status, 200);
     assert.equal((await get('/api/auth/otp', { method: 'POST', body: '{}' })).status, 404);
-    assert.deepEqual(await (await get('/api/auth/status')).json(), { required: false, authenticated: true, digits: 6, periodSeconds: STEP_SECONDS });
+    assert.deepEqual(await (await get('/api/auth/status')).json(), { required: false, authenticated: true, digits: 6, periodSeconds: STEP_SECONDS, pinSet: false, via: null, idleMinutes: 10 });
+    assert.equal((await get('/api/auth/pin', { method: 'POST', body: '{}' })).status, 404);
+    assert.equal((await get('/api/auth/pin', { method: 'PUT', body: '{}' })).status, 404);
+    assert.equal((await get('/api/auth/lock', { method: 'POST' })).status, 404);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+// ── AC 14-16: PIN sign-in, lock, and the status fields they add ─────────────
+
+function postPin(get, pin) {
+  return get('/api/auth/pin', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin }),
+  });
+}
+
+function putPin(get, pin, token) {
+  return get('/api/auth/pin', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Hub-Token': token } : {}) },
+    body: JSON.stringify({ pin }),
+  });
+}
+
+test('AC 14: POST /api/auth/pin is 404 on a gated server with no PIN set', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  await withServer({ home, otpSecret: secret }, async (get) => {
+    assert.equal((await postPin(get, '123456')).status, 404);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 14: a wrong PIN is 401, a right one buys a via: pin session', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  savePin('482913', home);
+  await withServer({ home, otpSecret: secret }, async (get) => {
+    const wrong = await postPin(get, '000000');
+    assert.equal(wrong.status, 401);
+    assert.match((await wrong.json()).error, /not right/);
+
+    const res = await postPin(get, '482913');
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.match(body.token, /^[A-Za-z0-9_-]{43}$/);
+    assert.ok(body.expiresAt > Date.now());
+
+    const status = await (await get('/api/auth/status', { headers: { 'X-Hub-Token': body.token } })).json();
+    assert.equal(status.via, 'pin');
+    assert.equal(status.pinSet, true);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 14: five wrong PINs lock the PIN exchange, on a guard separate from the OTP one', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  savePin('482913', home);
+  await withServer({ home, otpSecret: secret }, async (get) => {
+    for (let i = 0; i < 5; i++) assert.equal((await postPin(get, '000000')).status, 401);
+    const locked = await postPin(get, '482913');
+    assert.equal(locked.status, 429);
+    const body = await locked.json();
+    assert.ok(body.retryAfterSeconds > 0 && body.retryAfterSeconds <= 60);
+
+    // The OTP exchange still answers normally under the PIN lockout.
+    const otpRes = await postCode(get, totp(secret));
+    assert.equal(otpRes.status, 200);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 15: PUT /api/auth/pin needs a live otp session: 401 none, 403 a pin session, 400 a bad body, 204 on success', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  savePin('482913', home);
+  await withServer({ home, otpSecret: secret }, async (get) => {
+    assert.equal((await putPin(get, '999999')).status, 401);
+
+    const pinToken = (await (await postPin(get, '482913')).json()).token;
+    const forbidden = await putPin(get, '999999', pinToken);
+    assert.equal(forbidden.status, 403);
+    assert.match((await forbidden.json()).error, /authenticator code/);
+
+    const otpToken = (await (await postCode(get, totp(secret))).json()).token;
+    assert.equal((await putPin(get, '12345', otpToken)).status, 400);
+
+    const ok = await putPin(get, '999999', otpToken);
+    assert.equal(ok.status, 204);
+
+    // The replaced PIN signs in; the old one no longer does.
+    assert.equal((await postPin(get, '482913')).status, 401);
+    assert.equal((await postPin(get, '999999')).status, 200);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 16: POST /api/auth/lock revokes the session; the next gated request is 401', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  await withServer({ home, otpSecret: secret }, async (get) => {
+    const token = (await (await postCode(get, totp(secret))).json()).token;
+    const headers = { 'X-Hub-Token': token };
+    assert.equal((await get('/api/config', { headers })).status, 200);
+
+    const lock = await get('/api/auth/lock', { method: 'POST', headers });
+    assert.equal(lock.status, 204);
+
+    assert.equal((await get('/api/config', { headers })).status, 401);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 16: POST /api/auth/lock is 401 with no live token', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  await withServer({ home, otpSecret: secret }, async (get) => {
+    assert.equal((await get('/api/auth/lock', { method: 'POST' })).status, 401);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 16: /api/auth/status carries idleMinutes, overridable through createServer', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  await withServer({ home, otpSecret: secret, idleMinutes: 0.05 }, async (get) => {
+    const status = await (await get('/api/auth/status')).json();
+    assert.equal(status.idleMinutes, 0.05);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 12/15: pinSet flips true right after PUT, without a restart', async () => {
+  const home = tempHome();
+  const secret = generateSecret();
+  await withServer({ home, otpSecret: secret }, async (get) => {
+    assert.equal((await (await get('/api/auth/status')).json()).pinSet, false);
+    const otpToken = (await (await postCode(get, totp(secret))).json()).token;
+    await putPin(get, '135790', otpToken);
+    assert.equal((await (await get('/api/auth/status')).json()).pinSet, true);
   });
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -499,6 +643,41 @@ test('the resolve route writes the job workflow and enforces path safety', async
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('AC 4: the verify route relays openVerifyTerminal, refusing before it would spawn anything', async () => {
+  const home = tempHome();
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-verify-route-'));
+  const jobDir = path.join(project, '.work', 'a-job');
+  fs.mkdirSync(jobDir, { recursive: true });
+  // No human-verification step in_progress, so this never gets far enough to spawn.
+  fs.writeFileSync(path.join(jobDir, 'progress.json'), JSON.stringify({ workflow: [{ step: 'build', status: 'done' }] }, null, 2));
+  saveConfig({ projects: [project] }, home);
+  const pid = encodeProjectId(path.resolve(project));
+
+  await withServer({ home }, async (get) => {
+    // No in_progress human-verification step: 409, and no window opens (unit-tested spawn stub covers that; this only proves the route reaches openVerifyTerminal and relays its status).
+    const res = await get(`/api/projects/${pid}/jobs/a-job/verify`, { method: 'POST' });
+    assert.equal(res.status, 409);
+    assert.ok((await res.json()).error);
+
+    // GET reports the run state; nothing has been started for this job.
+    const state = await get(`/api/projects/${pid}/jobs/a-job/verify`);
+    assert.equal(state.status, 200);
+    assert.deepEqual(await state.json(), { folder: "a-job", known: false, running: false });
+
+    // A folder segment holding a separator is 400.
+    assert.equal((await get(`/api/projects/${pid}/jobs/..%2f..%2fescape/verify`, { method: 'POST' })).status, 400);
+
+    // An unknown project id is 404.
+    assert.equal((await get(`/api/projects/D--not-configured/jobs/a-job/verify`, { method: 'POST' })).status, 404);
+
+    // An unknown job folder is 404 (no progress.json to read).
+    assert.equal((await get(`/api/projects/${pid}/jobs/no-such-job/verify`, { method: 'POST' })).status, 404);
+  });
+
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 // ── AC 8: /api/projects/:pid/git/* ───────────────────────────────────────────
 
 const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t.local', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t.local' };
@@ -638,4 +817,54 @@ test('AC 8: only GET is supported on the git routes', async () => {
   });
   fs.rmSync(home, { recursive: true, force: true });
   fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test('AC 4: a verify run is tracked until its window closes - GET says running, then the exit code; a second POST meanwhile is 409', async () => {
+  const home = tempHome();
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-verify-track-'));
+  const jobDir = path.join(project, '.work', 'a-job');
+  fs.mkdirSync(jobDir, { recursive: true });
+  fs.writeFileSync(path.join(jobDir, 'progress.json'), JSON.stringify({ workflow: [{ step: 'human-verification', status: 'in_progress' }] }, null, 2));
+  saveConfig({ projects: [project] }, home);
+  const pid = encodeProjectId(path.resolve(project));
+
+  // Stands in for openVerifyTerminal: never spawns, hands back the exit hook.
+  const launches = [];
+  const openVerify = (projectPath, folder, { onExit }) => {
+    launches.push({ projectPath, folder, onExit });
+    return { ok: true, command: 'claude -p ...', cwd: projectPath };
+  };
+
+  await withServer({ home, openVerify }, async (get) => {
+    const started = await get(`/api/projects/${pid}/jobs/a-job/verify`, { method: 'POST' });
+    assert.equal(started.status, 200);
+    assert.equal((await started.json()).running, true);
+    assert.equal(launches.length, 1);
+    assert.equal(launches[0].projectPath, path.resolve(project));
+
+    let state = await (await get(`/api/projects/${pid}/jobs/a-job/verify`)).json();
+    assert.equal(state.known, true);
+    assert.equal(state.running, true);
+    assert.equal(state.exitCode, null);
+
+    // While the window is open a second click does not open another one.
+    const again = await get(`/api/projects/${pid}/jobs/a-job/verify`, { method: 'POST' });
+    assert.equal(again.status, 409);
+    assert.match((await again.json()).error, /already open/);
+    assert.equal(launches.length, 1);
+
+    // The window closes.
+    launches[0].onExit(0);
+    state = await (await get(`/api/projects/${pid}/jobs/a-job/verify`)).json();
+    assert.equal(state.running, false);
+    assert.equal(state.exitCode, 0);
+    assert.ok(state.endedAt >= state.startedAt);
+
+    // And a new run may start.
+    assert.equal((await get(`/api/projects/${pid}/jobs/a-job/verify`, { method: 'POST' })).status, 200);
+    assert.equal(launches.length, 2);
+  });
+
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
 });
