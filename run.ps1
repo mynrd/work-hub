@@ -282,6 +282,11 @@ if ($watch -and -not $gitCmd) {
 # through [ref]$ExitCode so callers can tell "no output" from "command failed".
 function Invoke-Git {
     param([string[]]$GitArgs, [ref]$ExitCode)
+    # Windows PowerShell 5.1: with the script-level 'Stop' preference, 2>&1
+    # turns git's first stderr line (e.g. an offline fetch) into a terminating
+    # error and kills the watch loop. Scope it to Continue here; failure is
+    # reported through the exit code, not the error stream.
+    $ErrorActionPreference = 'Continue'
     $out = & $gitCmd.Source -C $repoRoot @GitArgs 2>&1
     if ($ExitCode) { $ExitCode.Value = $LASTEXITCODE }
     return (@($out) | ForEach-Object { "$_" }) -join "`n"
