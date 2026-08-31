@@ -6,7 +6,9 @@
 // authenticator app, why the message a run sends only ever travels over stdin,
 // and why every other argument is an allowlisted token. See README.md § Exposure.
 //
-// node: built-ins only. No third-party dependency, no package.json.
+// node: built-ins plus exactly one third-party runtime dependency, node-pty,
+// which backs the in-page terminal (src/lib/shell.mjs) - there is no pty in
+// Node's built-ins. Everything else stays dependency-free.
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -22,6 +24,8 @@ import { createRunRegistry } from './lib/claude-run.mjs';
 import { resolveJob } from './lib/resolve-job.mjs';
 import { listBranches, listCommits, commitFiles, fileAtCommit, workingStatus, workingFile } from './lib/git.mjs';
 import { openTerminal, openVerifyTerminal } from './lib/terminal.mjs';
+import { createShellRegistry } from './lib/shell.mjs';
+import { listProcesses, killProcess } from './lib/processes.mjs';
 import { renderMarkdown } from './lib/markdown.mjs';
 import { loadEnrollment, createSessionStore, enrollmentPath } from './lib/authstore.mjs';
 import { loadPin, savePin, verifyPin } from './lib/pinstore.mjs';
@@ -269,6 +273,7 @@ function handleMarkdownRoute(res, projectPath, rawFolder, rawFile) {
 // ── Git inspection routes ────────────────────────────────────────────────────
 
 const GIT_SHA_RE = /^[0-9a-f]{7,40}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GIT_STATUS_AREAS = ['staged', 'unstaged', 'untracked'];
 
 async function handleGitBranches(res, projectPath) {
@@ -377,6 +382,7 @@ export function createServer({
   home = undefined,
   runs = createRunRegistry(),
   openVerify = openVerifyTerminal,
+  shells = createShellRegistry(),
   usage = createUsageCache(),
   sessions = createSessionStore(),
   idleMinutes = 10,
@@ -627,6 +633,79 @@ export function createServer({
     sendEmpty(res, 204);
   }
 
+  // ── In-page terminals ──────────────────────────────────────────────────────
+  // Several ptys per project, keyed by shellId (see lib/shell.mjs). These
+  // routes are the reason the whole /api/* tree is session-gated: input is fed
+  // straight to a shell running as the user.
+
+  async function handleShellOpen(req, res, pid, projectPath) {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (err) {
+      sendJson(res, err.tooLarge ? 413 : 400, { error: err.tooLarge ? err.message : `Invalid request body: ${err.message}` });
+      return;
+    }
+    const opened = await shells.open({ projectId: pid, cwd: projectPath, cols: body?.cols, rows: body?.rows });
+    if (!opened.ok) { sendJson(res, opened.status, { error: opened.error }); return; }
+    sendJson(res, 200, opened.shell);
+  }
+
+  /**
+   * The output stream: newline-delimited JSON events over a response that
+   * never ends until the shell exits or the client goes away. The page reads
+   * it with a streaming fetch (EventSource cannot carry the session header).
+   */
+  function handleShellStream(req, res, shellId) {
+    let ended = false;
+    const send = (event) => {
+      if (ended) return; // a straggling event after exit must not write to an ended response
+      res.write(JSON.stringify(event) + '\n');
+      if (event.type === 'exit') { ended = true; res.end(); }
+    };
+    const attached = shells.attach(shellId, send);
+    if (!attached.ok) { sendJson(res, attached.status, { error: attached.error }); return; }
+
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-cache',
+    });
+    if (attached.replay) res.write(JSON.stringify({ type: 'data', data: attached.replay }) + '\n');
+    if (!attached.running) { send({ type: 'exit', exitCode: shells.status(shellId)?.exitCode ?? null }); return; }
+
+    // Keeps intermediaries (and the client's reader) from mistaking a quiet
+    // shell for a dead connection.
+    const ping = setInterval(() => { try { res.write(JSON.stringify({ type: 'ping' }) + '\n'); } catch { /* closing */ } }, 30000);
+    ping.unref?.();
+    res.on('close', () => { clearInterval(ping); attached.unsubscribe(); });
+  }
+
+  async function handleShellInput(req, res, shellId) {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (err) {
+      sendJson(res, err.tooLarge ? 413 : 400, { error: err.tooLarge ? err.message : `Invalid request body: ${err.message}` });
+      return;
+    }
+    const wrote = shells.write(shellId, body?.data);
+    if (!wrote.ok) { sendJson(res, wrote.status, { error: wrote.error }); return; }
+    sendEmpty(res, 204);
+  }
+
+  async function handleShellResize(req, res, shellId) {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (err) {
+      sendJson(res, err.tooLarge ? 413 : 400, { error: err.tooLarge ? err.message : `Invalid request body: ${err.message}` });
+      return;
+    }
+    const resized = shells.resize(shellId, body?.cols, body?.rows);
+    if (!resized.ok) { sendJson(res, resized.status, { error: resized.error }); return; }
+    sendEmpty(res, 204);
+  }
+
   async function handleRunStart(req, res, projectPath, projectId, sessionId) {
     let body;
     try {
@@ -792,6 +871,57 @@ export function createServer({
       return;
     }
 
+    // /api/shells - the Processes list: every Work Hub shell across all
+    // projects, this session's and any straggler the OS still shows (see
+    // lib/processes.mjs). One place, whatever page you are on.
+    if (pathname === '/api/shells' && req.method === 'GET') {
+      const nameOf = (projectId) => {
+        const p = projectId ? resolveProjectId(config, projectId) : null;
+        return p ? (config.projectNames[p] || path.basename(p) || p) : undefined;
+      };
+      listProcesses({ registry: shells, nameOf })
+        .then((list) => sendJson(res, 200, { processes: list }))
+        .catch((err) => sendJson(res, 500, { error: `Could not list processes: ${err.message}` }));
+      return;
+    }
+
+    // /api/shells/:shellId[/...] - per-shell operations, keyed by the id the
+    // page already holds. stream/input/resize drive one terminal; DELETE kills
+    // a session shell cleanly by closing its pty.
+    if (pathname.startsWith('/api/shells/')) {
+      const rest = pathname.slice('/api/shells/'.length).split('/');
+      const shellId = decodeSegment(rest[0]);
+      if (!shellId || !UUID_RE.test(shellId)) { sendJson(res, 400, { error: 'Malformed shell id' }); return; }
+
+      if (rest.length === 1) {
+        if (req.method === 'DELETE') {
+          const killed = shells.kill(shellId);
+          if (!killed.ok) { sendJson(res, killed.status, { error: killed.error }); return; }
+          sendEmpty(res, 204);
+          return;
+        }
+        sendJson(res, 405, { error: 'Only DELETE is supported here' });
+        return;
+      }
+      if (rest[1] === 'stream' && rest.length === 2 && req.method === 'GET') { handleShellStream(req, res, shellId); return; }
+      if (rest[1] === 'input' && rest.length === 2 && req.method === 'POST') { handleShellInput(req, res, shellId); return; }
+      if (rest[1] === 'resize' && rest.length === 2 && req.method === 'POST') { handleShellResize(req, res, shellId); return; }
+      sendJson(res, 404, { error: 'Not found' });
+      return;
+    }
+
+    // /api/processes/:pid - force-kill a straggler by pid (a shell from a past
+    // run the registry no longer owns). taskkill /T takes its child tree too.
+    if (pathname.startsWith('/api/processes/') && req.method === 'DELETE') {
+      const pidStr = decodeSegment(pathname.slice('/api/processes/'.length));
+      const targetPid = Number(pidStr);
+      if (!Number.isInteger(targetPid) || targetPid <= 0) { sendJson(res, 400, { error: 'pid must be a positive integer' }); return; }
+      killProcess(targetPid)
+        .then((r) => { if (r.ok) sendEmpty(res, 204); else sendJson(res, r.status, { error: r.error }); })
+        .catch((err) => sendJson(res, 500, { error: err.message }));
+      return;
+    }
+
     if (pathname.startsWith('/api/projects/')) {
       const parts = pathname.slice('/api/projects/'.length).split('/');
       const pid = decodeSegment(parts[0]);
@@ -815,6 +945,18 @@ export function createServer({
       // rather than starring locally and hoping the next poll agrees.
       if (parts[1] === 'favorite' && parts.length === 2 && req.method === 'PUT') {
         handleFavoritePut(req, res, projectPath);
+        return;
+      }
+
+      // /api/projects/:pid/shells - the in-page terminals for this project.
+      // POST opens a new one (returns its shellId); GET lists this project's,
+      // so the Terminal tab can rebuild its `Terminal 1 | Terminal 2 | +`
+      // strip. Per-shell operations live under /api/shells/:shellId below,
+      // because a shellId is unique on its own and the page holds it directly.
+      if (parts[1] === 'shells' && parts.length === 2) {
+        if (req.method === 'POST') { handleShellOpen(req, res, pid, projectPath); return; }
+        if (req.method === 'GET') { sendJson(res, 200, { shells: shells.listForProject(pid) }); return; }
+        sendJson(res, 405, { error: 'Only GET and POST are supported here' });
         return;
       }
 
@@ -961,7 +1103,7 @@ export function createServer({
     sendJson(res, 404, { error: 'Not found' });
   });
 
-  server.on('close', () => usage.stop());
+  server.on('close', () => { usage.stop(); shells.killAll(); });
   return server;
 }
 

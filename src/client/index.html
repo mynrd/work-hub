@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="color-scheme" content="light dark" />
 <title>Work Hub</title>
+<link rel="stylesheet" href="/vendor/xterm.css" />
 <link rel="stylesheet" href="/styles/tokens.css" />
 <link rel="stylesheet" href="/styles/layout.css" />
 <link rel="stylesheet" href="/styles/components.css" />
@@ -63,6 +64,7 @@
   </div>
   <div class="divider-v"></div>
   <!-- .btn__label is what the phone breakpoint hides to leave an icon-only button. -->
+  <button type="button" class="btn btn-secondary" id="processesBtn" title="Open shells started by Work Hub"><svg class="icon"><use href="#i-terminal"/></svg> <span class="btn__label">Processes</span></button>
   <a class="btn btn-secondary" href="#/" title="Dashboard"><svg class="icon"><use href="#i-home"/></svg> <span class="btn__label">Dashboard</span></a>
   <a class="btn btn-secondary" href="#/settings" title="Settings"><svg class="icon"><use href="#i-settings"/></svg> <span class="btn__label">Settings</span></a>
   <button type="button" class="btn btn-secondary" id="refreshBtn" title="Refresh"><svg class="icon"><use href="#i-refresh"/></svg> <span class="btn__label">Refresh</span></button>
@@ -135,6 +137,28 @@
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Processes dialog: every shell Work Hub started, across all projects. Filled
+     by js/components/processes-dialog.mjs when the topbar button is clicked. -->
+<div class="overlay" id="processesOverlay" role="dialog" aria-modal="true" aria-labelledby="processesTitle">
+  <div class="modal modal--sm">
+    <div class="modal__head">
+      <div>
+        <h3 id="processesTitle">Processes</h3>
+        <p>Shells Work Hub started. A restart of the app closes the ones it owns; a straggler that outlived it shows here too.</p>
+      </div>
+      <div class="row gap-2">
+        <button type="button" class="btn btn-secondary btn-sm" id="processesRefreshBtn" title="Re-scan">
+          <svg class="icon icon-sm"><use href="#i-refresh"/></svg> <span id="processesRefreshLabel">Refresh</span>
+        </button>
+        <button type="button" class="icon-btn" id="processesCloseBtn" aria-label="Close" title="Close">
+          <svg class="icon"><use href="#i-x"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="modal__body"><div id="processesBody"></div></div>
   </div>
 </div>
 

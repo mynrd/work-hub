@@ -7,6 +7,7 @@ import { registerView, renderCurrentPage, setApp } from '../render.mjs';
 import { jobTable, unreadableTable, wireJobRows } from '../components/job-table.mjs';
 import { sessionsCardHtml, wireSessionPager, wireNewConversation, wireTerminal } from '../components/sessions-card.mjs';
 import { gitPaneHtml, wireGitPane, enterGitPane, refreshGitPane } from '../components/git-card.mjs';
+import { terminalPaneHtml, wireTerminalPane, terminalPaneIsLive } from '../components/terminal-pane.mjs';
 
 // The page-level tab strip: which pid maps to which tab lives in
 // state.projectTab, so the 30s repaint (renderCurrentPage) keeps whatever was
@@ -15,6 +16,7 @@ var PROJECT_TABS = [
   { id: 'work', label: 'Work Items' },
   { id: 'conversation', label: 'Conversation' },
   { id: 'git', label: 'Branch and Commits' },
+  { id: 'terminal', label: 'Terminal' },
 ];
 
 function projectTabsHtml(tab) {
@@ -44,6 +46,12 @@ function renderProject() {
     paneHtml = sessionsCardHtml(pid, null);
   } else if (tab === 'git') {
     paneHtml = '<div id="gitPane">' + gitPaneHtml(pid) + '</div>';
+  } else if (tab === 'terminal') {
+    // A live terminal must not be rebuilt by the 30s repaint - replacing the
+    // DOM detaches xterm and steals its focus mid-typing. The page around it
+    // is static enough to leave as it is until the tab changes.
+    if (terminalPaneIsLive(pid)) return;
+    paneHtml = terminalPaneHtml(pid);
   } else {
     paneHtml = jobs
       ? jobTable('Worked today', 'A file under the job folder changed today.', jobs.today, 'info', false, 'Nothing has been touched today.') +
@@ -85,6 +93,7 @@ function renderProject() {
   if (tab === 'work') wireJobRows();
   if (tab === 'conversation') { wireNewConversation(pid); wireTerminal(pid); wireSessionPager(pid); }
   if (tab === 'git') wireGitPane(pid);
+  if (tab === 'terminal') wireTerminalPane(pid);
   wireProjectTabs(pid);
   wireProjectRefresh(pid);
   wireProjectName(project);

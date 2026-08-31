@@ -6,10 +6,12 @@ The dashboard is a list of the folders you monitor and nothing more. Open one an
 
 - **Jobs.** That folder's `.work/<job>/progress.json` files, grouped into **Worked today**, **Not yet started** and **Others**, with a tabbed detail dialog per job (Acceptance Criteria, Intake, Tasks, Tests, Runs, Docs, Raw).
 - **Conversations.** Every Claude Code session whose working directory was that folder, 20 to a page, rendered as a chat, with a composer that can reply to a session or start a new one by running `claude` for you. **Terminal** opens a real console window in that folder running `claude remote-control --spawn same-dir`, named `<computer name> - <folder name>` so you can tell the sessions apart on your phone.
+- **Terminal tab.** Real shells (`pwsh -NoLogo`) running in that folder on the server machine, rendered in the page by xterm.js over a pty, so everything they print streams to the browser and everything you type goes to them - `npm`, `dotnet build`, `ng serve`, `git`, and interactive `claude` included. Several per project via a `Terminal 1 | Terminal 2 | +` strip, each its own shell; they keep running when you navigate away, and reattaching replays the screen. Restart replaces the active shell, `×` closes one, and Maximise fills the viewport.
+- **Processes button** (topbar, before Dashboard). Lists every shell Work Hub started across all projects, with a Kill per row. Each shell is tagged - `pwsh … -Command "$env:WORK_HUB_SHELL='<project>|<shellId>'"` - so a straggler that outlived a restart is still found (by a WMI query on Windows) and can be force-killed by pid. A normal restart of the app closes the shells it owns, because killing the server closes their ConPTYs.
 
 It also shows your real subscription usage, straight from `claude -p /usage`.
 
-Node built-ins only. No `package.json`, no `npm install`, no dependencies.
+Node built-ins plus exactly one runtime dependency: `node-pty`, which backs the Terminal tab (there is no pty in Node's built-ins). Without `npm install` everything else still works; the Terminal tab answers 501. xterm.js is vendored into `src/client/vendor/`, so the client stays static.
 
 ---
 
@@ -65,6 +67,7 @@ On start it prints the bound address and the config file path. A port already in
 ### Requirements
 
 - **Node 18+** (developed against v26.7.0).
+- **`npm install`** once, for `node-pty` (the Terminal tab's pty). Skipping it only costs that tab.
 - **`claude` on PATH and signed in.** The Plan Usage card and every reply shell out to it.
 - Read access to `~/.claude/projects`, where Claude Code keeps its transcripts.
 - **Windows** for the **Terminal** button only. It shells out to `cmd /c start`; everywhere else that one button answers 501 and names the command to run by hand. Nothing else in Work Hub is Windows-only.
@@ -100,7 +103,7 @@ The secret lives in `~/.work-hub/totp.json`, **not** in a `.env` in this repo - 
 
 **The page locks itself after 10 minutes idle** (no keyboard, pointer, or touch activity) on a gated server: the session is revoked server-side with `POST /api/auth/lock`, the token is dropped from `localStorage`, and the sign-in prompt reopens - PIN by default when one is set, with a link back to the authenticator code. Unlocking continues the page in place, no reload.
 
-Anyone who reaches the port and can produce a code can read every file under your `.work/` folders, read every Claude Code transcript for the monitored projects, start new Claude runs, and **open a terminal window on the machine running the server** - the Terminal button is a `POST` that spawns `cmd /c start`, so a console appears on your desktop running `claude remote-control --spawn same-dir`, which then accepts work from claude.ai and the mobile app. Treat the phone holding that pairing like an SSH key. The same pairing can also launch a headless `claude -p` run in a console: the Verified button's route runs `claude -p '/mynrd-flow:mynrd-verified .work\<folder>'` on the server's desktop for one job folder at a time.
+Anyone who reaches the port and can produce a code can read every file under your `.work/` folders, read every Claude Code transcript for the monitored projects, start new Claude runs, and **type into real shells running as you** - the Terminal tab (`/api/shells/*` and `/api/projects/:pid/shells`, [shell.mjs](src/lib/shell.mjs)) is arbitrary command execution by design: raw keystrokes go to a `pwsh` pty in the project folder, and nothing interprets or restricts them. The Processes button can also **force-kill a straggler shell by pid** (`DELETE /api/processes/:pid`, `taskkill /T /F`); that route re-checks the pid is a marked Work Hub shell before killing, so it can never take down an arbitrary process someone names in a crafted request. They can also **open a terminal window on the machine running the server** - the Terminal button is a `POST` that spawns `cmd /c start`, so a console appears on your desktop running `claude remote-control --spawn same-dir`, which then accepts work from claude.ai and the mobile app. Treat the phone holding that pairing like an SSH key. The same pairing can also launch a headless `claude -p` run in a console: the Verified button's route runs `claude -p '/mynrd-flow:mynrd-verified .work\<folder>'` on the server's desktop for one job folder at a time.
 
 The message you type is never an argument. On Windows `claude` resolves to `claude.cmd`, which Node will only spawn with `shell: true`, and with `shell: true` Node does not escape argv. So every argument is an allowlisted token or a UUID matched against a regex, and the message itself goes over the child's stdin.
 

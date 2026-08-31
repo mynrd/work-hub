@@ -6,6 +6,7 @@ import { renderCurrentPage } from './render.mjs';
 import { loadChat, loadConfig, loadDashboard, loadJobs, loadSessions, loadUsage } from './data.mjs';
 import { initTheme } from './theme.mjs';
 import { initRouter } from './router.mjs';
+import { initProcessesDialog } from './components/processes-dialog.mjs';
 
 import './views/dashboard.mjs';
 import './views/settings.mjs';
@@ -13,6 +14,7 @@ import './views/project.mjs';
 import './views/conversation.mjs';
 
 initTheme();
+initProcessesDialog();
 
 // ---- Topbar -----------------------------------------------------------------
 

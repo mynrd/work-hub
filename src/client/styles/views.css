@@ -58,6 +58,38 @@
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 .term-status { padding: 0 var(--s-5) var(--s-4); font-size: var(--fs-xs); color: var(--fg-muted); overflow-wrap: anywhere; }
 .term-status.is-error { color: var(--danger-fg); font-family: var(--font-mono); white-space: pre-wrap; }
+/* The Terminal tab. The screen is dark in both themes - xterm paints its own
+   colours (TERM_THEME in terminal-pane.mjs), the host just matches them. */
+.term-host { padding: var(--s-3); background: #0e0f17; }
+.term-screen { height: 60vh; min-height: 320px; }
+
+/* The Terminal 1 | Terminal 2 | + strip. */
+.term-strip { display: flex; align-items: stretch; gap: var(--s-1); padding: var(--s-2) var(--s-3) 0; background: var(--surface-2); border-top: 1px solid var(--border); overflow-x: auto; }
+.term-tab { display: inline-flex; align-items: center; gap: var(--s-2); padding: 6px 10px; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-muted); background: transparent; border: 1px solid transparent; border-bottom: none; border-radius: var(--r-sm) var(--r-sm) 0 0; cursor: pointer; white-space: nowrap; }
+.term-tab:hover { color: var(--fg); background: var(--surface-3); }
+/* The active tab sits on the terminal's dark ground, so its text stays light
+   in both themes - in light mode var(--fg) would be near-black and vanish. */
+.term-tab.is-active { color: #d6d9e4; background: #0e0f17; border-color: var(--border); }
+.term-tab__label { pointer-events: none; }
+.term-tab__close { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: var(--r-pill); font-size: 15px; line-height: 1; color: var(--fg-subtle); }
+.term-tab.is-active .term-tab__close { color: #9aa0b4; }
+.term-tab__close:hover { color: var(--danger-fg); background: color-mix(in srgb, var(--danger) 18%, transparent); }
+.term-tab--new { font-size: var(--fs-md); padding: 4px 12px; color: var(--fg-muted); }
+/* Inline rename box, shown while a tab label is being edited. */
+.term-tab__rename { width: 96px; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg); background: var(--surface); border: 1px solid var(--accent-400); border-radius: var(--r-sm); padding: 1px 4px; outline: none; }
+
+/* Maximise: the card breaks out to fill the viewport. */
+.term-card.is-max { position: fixed; inset: var(--s-3); z-index: 60; margin: 0; box-shadow: var(--shadow-xl); display: flex; flex-direction: column; }
+.term-card.is-max .term-host { flex: 1 1 auto; }
+.term-card.is-max .term-screen { height: 100%; }
+
+/* Processes dialog rows. */
+.proc-list { display: flex; flex-direction: column; gap: var(--s-2); }
+.proc-row { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
+.proc-row__main { flex: 1 1 auto; min-width: 0; }
+.proc-row__title { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); flex-wrap: wrap; }
+.proc-row__meta { font-size: var(--fs-xs); color: var(--fg-muted); margin-top: 2px; overflow-wrap: anywhere; }
+.proc-row__kill { flex: none; }
 .pager { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-3) var(--s-4); border-top: 1px solid var(--border); }
 .pager__info { font-size: var(--fs-xs); color: var(--fg-muted); margin-right: auto; font-family: var(--font-mono); }
 .dot-live { width: 8px; height: 8px; border-radius: 99px; background: var(--success); flex: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 25%, transparent); }

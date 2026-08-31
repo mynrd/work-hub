@@ -180,6 +180,34 @@ function startIdleLock(status) {
 
 fetchAuthStatus().then(startIdleLock);
 
+/* Same auth handling as api(), but hands back the raw Response so the caller
+   can read a stream that never ends (the terminal's output). Nothing here
+   touches the body on success - only an error status is parsed. */
+export function apiStream(path, options) {
+  var opts = options || {};
+  var headers = Object.assign({}, opts.headers || {});
+  var token = getToken();
+  if (token) headers['X-Hub-Token'] = token;
+  return fetch(path, Object.assign({}, opts, { headers: headers })).then(function (res) {
+    if (res.status === 401) {
+      clearToken();
+      return new Promise(function (resolve, reject) {
+        askForOtp(function () { apiStream(path, options).then(resolve, reject); });
+      });
+    }
+    if (!res.ok) {
+      var isJson = (res.headers.get('content-type') || '').indexOf('json') !== -1;
+      return (isJson ? res.json() : res.text()).then(function (payload) {
+        var message = payload && payload.error ? payload.error : String(payload || res.status);
+        var err = new Error(message);
+        err.status = res.status;
+        throw err;
+      });
+    }
+    return res;
+  });
+}
+
 export function api(path, options) {
   var opts = options || {};
   var headers = Object.assign({}, opts.headers || {});
