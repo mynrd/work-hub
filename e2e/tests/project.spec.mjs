@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-import { goto, projectId, topbar, cardTitled, jobRow, projectTabs, gitPane } from '../support/app.mjs';
+import { goto, project, projectId, topbar, cardTitled, jobRow, projectTabs, gitPane } from '../support/app.mjs';
 
 test.beforeEach(async ({ page }) => {
   await goto(page, '#/');
@@ -205,4 +205,90 @@ test('a folder with no .work and no transcripts shows both empty states', async 
 test('a project id that is not configured explains itself instead of hanging', async ({ page }) => {
   await goto(page, '#/p/not-a-configured-project');
   await expect(page.locator('#app')).toContainText('No configured project with id');
+});
+
+/* Renaming from the h1. The config PUT (and, where the new name needs to show
+   up in the h1, the dashboard GET that follows it) are stubbed, so - like
+   Settings' "directory suggestions and the name dialog" block - nothing here
+   touches the real config.json and both viewport projects can run it in
+   parallel. */
+test.describe('renaming a project from its title', () => {
+  const dlg = (page) => ({
+    overlay: page.locator('#projectRenameOverlay'),
+    input: page.locator('#projectRenameInput'),
+    save: page.locator('#projectRenameSaveBtn'),
+    cancel: page.locator('#projectRenameCancelBtn'),
+  });
+
+  test('clicking the title opens the editor prefilled with the current display name', async ({ page }) => {
+    await page.locator('#projectNameBtn').click();
+    const d = dlg(page);
+    await expect(d.overlay).toHaveClass(/is-open/);
+    await expect(d.input).toHaveValue('proj-a');
+  });
+
+  test('Save sends the new name keyed by the project path, and the h1 updates', async ({ page }) => {
+    const projectPath = (await project(page, 'proj-a')).path;
+    let putBody = null;
+    await page.route('**/api/config', async (route) => {
+      if (route.request().method() !== 'PUT') { await route.continue(); return; }
+      putBody = route.request().postDataJSON();
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(putBody) });
+    });
+    // The stubbed PUT never actually rewrites config.json, so the dashboard
+    // reload after it would still answer with the old name unless this is
+    // stubbed too - it echoes back the same dashboard with just this one
+    // project's name swapped, the way the real server would after that PUT.
+    await page.route('**/api/dashboard', async (route) => {
+      const dash = await (await route.fetch()).json();
+      dash.projects = dash.projects.map((p) => (p.path === projectPath ? { ...p, name: 'Renamed Project' } : p));
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(dash) });
+    });
+
+    await page.locator('#projectNameBtn').click();
+    const d = dlg(page);
+    await d.input.fill('Renamed Project');
+    await d.save.click();
+
+    await expect(d.overlay).not.toHaveClass(/is-open/);
+    expect(putBody.projectNames[projectPath]).toBe('Renamed Project');
+    await expect(page.locator('.page-head h1')).toHaveText('Renamed Project');
+  });
+
+  test('saving an empty name sends a PUT without that key, so the display falls back to the basename', async ({ page }) => {
+    const projectPath = (await project(page, 'proj-a')).path;
+    let putBody = null;
+    await page.route('**/api/config', async (route) => {
+      if (route.request().method() !== 'PUT') { await route.continue(); return; }
+      putBody = route.request().postDataJSON();
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(putBody) });
+    });
+
+    await page.locator('#projectNameBtn').click();
+    const d = dlg(page);
+    await d.input.fill('');
+    await d.save.click();
+
+    await expect(d.overlay).not.toHaveClass(/is-open/);
+    expect(putBody.projectNames).not.toHaveProperty(projectPath);
+  });
+
+  test('Cancel and Escape close the editor and save nothing', async ({ page }) => {
+    const puts = [];
+    page.on('request', (r) => { if (r.method() === 'PUT') puts.push(r.url()); });
+    const d = dlg(page);
+
+    await page.locator('#projectNameBtn').click();
+    await expect(d.overlay).toHaveClass(/is-open/);
+    await d.cancel.click();
+    await expect(d.overlay).not.toHaveClass(/is-open/);
+
+    await page.locator('#projectNameBtn').click();
+    await expect(d.overlay).toHaveClass(/is-open/);
+    await page.keyboard.press('Escape');
+    await expect(d.overlay).not.toHaveClass(/is-open/);
+
+    expect(puts).toEqual([]);
+    await expect(page.locator('.page-head h1')).toHaveText('proj-a');
+  });
 });

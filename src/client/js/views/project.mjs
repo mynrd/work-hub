@@ -2,7 +2,7 @@
 
 import { esc, errorCard, loadingCard } from '../dom.mjs';
 import { state, timers } from '../state.mjs';
-import { loadConfig, loadDashboard, loadJobs, loadSessions, projectOf } from '../data.mjs';
+import { loadConfig, loadDashboard, loadJobs, loadSessions, projectOf, saveConfig } from '../data.mjs';
 import { registerView, renderCurrentPage, setApp } from '../render.mjs';
 import { jobTable, unreadableTable, wireJobRows } from '../components/job-table.mjs';
 import { sessionsCardHtml, wireSessionPager, wireNewConversation, wireTerminal } from '../components/sessions-card.mjs';
@@ -54,7 +54,8 @@ function renderProject() {
   }
 
   setApp(
-    '<div class="page-head"><div><h1>' + esc(project.name) + '</h1><p class="mono">' + esc(project.path) + '</p></div>' +
+    '<div class="page-head"><div><h1><button type="button" class="title-edit" id="projectNameBtn" title="Click to rename this project">' +
+      esc(project.name) + '</button></h1><p class="mono">' + esc(project.path) + '</p></div>' +
     '<div class="row gap-2">' +
       '<a class="btn btn-secondary" href="#/"><svg class="icon"><use href="#i-back"/></svg> Dashboard</a>' +
       '<button type="button" class="btn btn-secondary" id="projectRefreshBtn" title="Re-scan .work/ and re-read the transcripts for this folder">' +
@@ -62,13 +63,86 @@ function renderProject() {
     '</div></div>' +
     (project.missing ? errorCard('This folder does not exist on disk right now.') : '') +
     projectTabsHtml(tab) +
-    '<div class="tabpanel" id="panel-' + tab + '" role="tabpanel" aria-labelledby="ptab-' + tab + '">' + paneHtml + '</div>'
+    '<div class="tabpanel" id="panel-' + tab + '" role="tabpanel" aria-labelledby="ptab-' + tab + '">' + paneHtml + '</div>' +
+    // The rename dialog: same overlay/modal idiom as Settings' project-name
+    // dialog (openNameDialog in settings.mjs), but its own ids - this is a
+    // rename of an already-configured project, not the add-folder flow.
+    '<div class="overlay" id="projectRenameOverlay" role="dialog" aria-modal="true" aria-labelledby="projectRenameTitle">' +
+      '<div class="modal modal--sm">' +
+        '<div class="modal__head"><div><h3 id="projectRenameTitle">Rename this project</h3></div></div>' +
+        '<div class="modal__body">' +
+          '<div class="col gap-2"><label class="fs-xs muted" for="projectRenameInput">Project name</label>' +
+            '<input class="input" id="projectRenameInput" /></div>' +
+          '<div id="projectRenameError" class="fs-sm" style="color:var(--danger-fg)" hidden></div>' +
+          '<div class="row gap-2">' +
+            '<button type="button" class="btn btn-primary" id="projectRenameSaveBtn">Save</button>' +
+            '<button type="button" class="btn btn-secondary" id="projectRenameCancelBtn">Cancel</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>'
   );
   if (tab === 'work') wireJobRows();
   if (tab === 'conversation') { wireNewConversation(pid); wireTerminal(pid); wireSessionPager(pid); }
   if (tab === 'git') wireGitPane(pid);
   wireProjectTabs(pid);
   wireProjectRefresh(pid);
+  wireProjectName(project);
+}
+
+/* Opens on a click (or Enter/Space, for free - it's a real <button>) on the
+   h1, prefilled with the current display name. Saving writes projectNames
+   keyed by the project's configured path (not its id, which is derived from
+   the path and would break the link if the path ever changed) - an empty
+   name deletes the key instead of storing '', so config.mjs's
+   normalizeProjectNames drops it server-side and the dashboard falls back to
+   the folder basename. The dashboard is reloaded (not just patched locally)
+   so this page and the next dashboard visit agree on the name in one place. */
+function wireProjectName(project) {
+  var btn = document.getElementById('projectNameBtn');
+  var overlay = document.getElementById('projectRenameOverlay');
+  var input = document.getElementById('projectRenameInput');
+  var saveBtn = document.getElementById('projectRenameSaveBtn');
+  var cancelBtn = document.getElementById('projectRenameCancelBtn');
+  var errorEl = document.getElementById('projectRenameError');
+  if (!btn) return;
+
+  function showError(message) { errorEl.textContent = message; errorEl.hidden = !message; }
+
+  function openDialog() {
+    showError('');
+    input.value = project.name;
+    overlay.classList.add('is-open');
+    input.focus();
+    input.select();
+    // The project page never loads config on its own - kick it off now so
+    // Save has state.config.projectNames to merge into, without blocking the
+    // dialog opening on it.
+    if (!state.config) loadConfig();
+  }
+  function closeDialog() { overlay.classList.remove('is-open'); }
+
+  btn.addEventListener('click', openDialog);
+
+  saveBtn.addEventListener('click', function () {
+    var name = input.value.trim();
+    saveBtn.disabled = true;
+    (state.config ? Promise.resolve() : loadConfig()).then(function () {
+      var names = Object.assign({}, state.config.projectNames || {});
+      if (name) names[project.path] = name; else delete names[project.path];
+      return saveConfig({ projectNames: names });
+    }).then(function () {
+      saveBtn.disabled = false;
+      closeDialog();
+      state.dashboard = null;
+      return loadDashboard();
+    }).then(renderCurrentPage)
+      .catch(function (err) { saveBtn.disabled = false; showError(err.message); });
+  });
+
+  cancelBtn.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', function (e) { if (e.target === overlay) closeDialog(); });
+  overlay.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDialog(); });
 }
 
 /* Same click + arrow-key idiom as the job detail dialog's tab strip

@@ -339,6 +339,32 @@ async function handleGitCommitFile(res, projectPath, sha, filePath) {
   }
 }
 
+/**
+ * Lists the immediate subdirectories of an absolute path, directories only,
+ * sorted case-insensitively. Never an error body: a missing param, a relative
+ * path, a non-existent path, a file, or an unreadable directory all answer
+ * `{ dirs: [] }` - this only ever helps a folder picker offer children, so
+ * there is nothing for the caller to react to besides an empty list.
+ */
+function handleFsDirs(res, rawPath) {
+  if (typeof rawPath !== 'string' || !rawPath || !path.isAbsolute(rawPath)) {
+    sendJson(res, 200, { dirs: [] });
+    return;
+  }
+  let entries;
+  try {
+    entries = fs.readdirSync(rawPath, { withFileTypes: true });
+  } catch {
+    sendJson(res, 200, { dirs: [] });
+    return;
+  }
+  const dirs = entries
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  sendJson(res, 200, { dirs });
+}
+
 // ── Server ───────────────────────────────────────────────────────────────────
 
 /**
@@ -374,6 +400,7 @@ export function createServer({
    * clicked (`GET /api/projects/:pid/jobs`).
    */
   function buildDashboard() {
+    const favorites = new Set((config.favorites ?? []).map((p) => p.toLowerCase()));
     const projects = config.projects.map((projectPath) => {
       let missing = false;
       let hasWorkDir = false;
@@ -389,19 +416,24 @@ export function createServer({
       return {
         id: encodeProjectId(projectPath),
         path: projectPath,
-        name: path.basename(projectPath) || projectPath,
+        name: config.projectNames[projectPath] || path.basename(projectPath) || projectPath,
         missing,
         hasWorkDir,
+        favorite: favorites.has(projectPath.toLowerCase()),
       };
     });
 
-    return { projects, configPath: configPath(...homeArgs), loadError: config.loadError ?? null };
+    // Favourites first, config order kept inside each group - a starred folder
+    // moves to the front, it does not shuffle everything else.
+    const sorted = [...projects.filter((p) => p.favorite), ...projects.filter((p) => !p.favorite)];
+
+    return { projects: sorted, configPath: configPath(...homeArgs), loadError: config.loadError ?? null };
   }
 
   /** One project's jobs, scanned on demand. This is the expensive call. */
   function buildProjectJobs(projectPath, pid, now = Date.now()) {
     const scan = scanWorkFolder(projectPath, { now });
-    const projectName = path.basename(projectPath) || projectPath;
+    const projectName = config.projectNames[projectPath] || path.basename(projectPath) || projectPath;
     const tag = (job) => ({ ...job, projectId: pid, projectName });
 
     return {
@@ -443,6 +475,10 @@ export function createServer({
     try {
       config = saveConfig({
         projects: accepted,
+        // Not editable here - Settings does not know about stars. A folder
+        // dropped from `projects` loses its star in normalizeConfig.
+        favorites: config.favorites,
+        projectNames: body?.projectNames ?? config.projectNames,
         usageIntervalMinutes: body?.usageIntervalMinutes ?? config.usageIntervalMinutes,
         defaults: body?.defaults ?? config.defaults,
       }, ...homeArgs);
@@ -453,6 +489,30 @@ export function createServer({
 
     usage.setIntervalMinutes(config.usageIntervalMinutes);
     sendJson(res, 200, { ...config, configPath: configPath(...homeArgs) });
+  }
+
+  async function handleFavoritePut(req, res, projectPath) {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (err) {
+      sendJson(res, err.tooLarge ? 413 : 400, { error: err.tooLarge ? err.message : `Invalid request body: ${err.message}` });
+      return;
+    }
+    if (typeof body?.favorite !== 'boolean') {
+      sendJson(res, 400, { error: '`favorite` must be true or false' });
+      return;
+    }
+
+    const key = projectPath.toLowerCase();
+    const kept = (config.favorites ?? []).filter((p) => p.toLowerCase() !== key);
+    try {
+      config = saveConfig({ ...config, favorites: body.favorite ? [...kept, projectPath] : kept }, ...homeArgs);
+    } catch (err) {
+      sendJson(res, 500, { error: `Cannot write ${configPath(...homeArgs)}: ${err.message}` });
+      return;
+    }
+    sendJson(res, 200, buildDashboard());
   }
 
   /** `<pid>/<folder>` -> the state of that job's verify window, while this process lives. */
@@ -700,6 +760,11 @@ export function createServer({
       return;
     }
 
+    if (pathname === '/api/fs/dirs' && req.method === 'GET') {
+      handleFsDirs(res, url.searchParams.get('path'));
+      return;
+    }
+
     if (pathname === '/api/dashboard' && req.method === 'GET') {
       try {
         sendJson(res, 200, buildDashboard());
@@ -742,6 +807,14 @@ export function createServer({
         } catch (err) {
           sendJson(res, 500, { error: `Scan failed: ${err.message}` });
         }
+        return;
+      }
+
+      // /api/projects/:pid/favorite - stars or unstars a monitored folder. The
+      // whole dashboard comes back so the strip repaints from one response
+      // rather than starring locally and hoping the next poll agrees.
+      if (parts[1] === 'favorite' && parts.length === 2 && req.method === 'PUT') {
+        handleFavoritePut(req, res, projectPath);
         return;
       }
 

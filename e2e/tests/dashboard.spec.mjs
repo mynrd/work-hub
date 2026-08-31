@@ -58,6 +58,40 @@ test('a project card is a real link, so it opens the project route', async ({ pa
   expect(page.url()).toContain('#/p/');
 });
 
+test.describe('favourites', () => {
+  test.beforeEach(({ }, testInfo) => {
+    test.skip(testInfo.project.name !== 'desktop', 'config writes run once, on desktop only');
+  });
+
+  test('starring a folder pins it to the front of the strip and outlives a reload', async ({ page }) => {
+    const strip = cardTitled(page, 'Projects').locator('.strip');
+    const star = (name) => strip.locator('.proj-cell', { hasText: name }).locator('.proj__fav');
+    // proj-empty is second in the config, so seeing it first is the sort working
+    // rather than the fixture order happening to agree.
+    await expect(strip.locator('.proj__name').first()).toHaveText('proj-a');
+
+    try {
+      await star('proj-empty').click();
+      await expect(star('proj-empty')).toHaveAttribute('aria-pressed', 'true');
+      await expect(strip.locator('.proj__name').first()).toHaveText('proj-empty');
+      // The star sits over the card's <a>; clicking it must not navigate.
+      expect(page.url()).not.toContain('#/p/');
+
+      // The flag is in ~/.work-hub/config.json, not this browser, so a reload
+      // that re-fetches /api/dashboard still shows it starred and first.
+      await page.reload();
+      await expect(strip.locator('.proj__name').first()).toHaveText('proj-empty');
+      await expect(star('proj-empty')).toHaveAttribute('aria-pressed', 'true');
+      await expect(star('proj-a')).toHaveAttribute('aria-pressed', 'false');
+    } finally {
+      await star('proj-empty').click();
+    }
+
+    await expect(star('proj-empty')).toHaveAttribute('aria-pressed', 'false');
+    await expect(strip.locator('.proj__name').first()).toHaveText('proj-a');
+  });
+});
+
 test('search filters the project strip and the count badge follows it', async ({ page }) => {
   const projects = cardTitled(page, 'Projects');
   const before = await projects.locator('.proj').count();

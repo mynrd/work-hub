@@ -73,6 +73,17 @@
 .page-head h1 { font-size: var(--fs-2xl); }
 .page-head p { color: var(--fg-muted); margin-top: var(--s-1); font-size: var(--fs-md); }
 
+/* The project page's h1 is a real <button> so it is keyboard-reachable
+   (Enter/Space open the rename dialog) without extra keydown wiring. */
+.title-edit {
+  background: none; border: none; padding: 0; margin: 0; font: inherit; color: inherit;
+  cursor: pointer; display: inline-flex; align-items: center; gap: var(--s-2); border-radius: var(--r-sm);
+}
+.title-edit::after { content: "\270E"; font-size: var(--fs-sm); color: var(--fg-subtle); }
+.title-edit:hover, .title-edit:focus-visible { color: var(--accent-600); }
+.title-edit:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 3px; }
+[data-theme="dark"] .title-edit:hover, [data-theme="dark"] .title-edit:focus-visible { color: var(--accent-400); }
+
 .grid { display: grid; gap: var(--s-3); }
 
 /* ---------- Split panes (project page) ---------- */

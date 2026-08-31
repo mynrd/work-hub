@@ -49,12 +49,16 @@ function setPromptMode(mode) {
     otpSubmitBtn.textContent = 'Unlock';
     otpModeLink.textContent = 'Use authenticator code';
     otpInput.setAttribute('autocomplete', 'off');
+    // A PIN is a secret the user knows and reuses, so it is masked. The
+    // authenticator code below is single-use and stays readable.
+    otpInput.type = 'password';
   } else {
     otpTitle.textContent = 'Enter your code';
     otpDesc.textContent = 'Open your authenticator and type the 6 digit code it shows for Work Hub. A correct code signs this browser in for 12 hours.';
     otpSubmitBtn.textContent = 'Sign in';
     otpModeLink.textContent = 'Use PIN';
     otpInput.setAttribute('autocomplete', 'one-time-code');
+    otpInput.type = 'text';
   }
   otpModeLink.hidden = !pinSet;
   otpError.textContent = '';

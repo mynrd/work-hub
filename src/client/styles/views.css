@@ -29,9 +29,24 @@
      right-click-copy-link; the link colour and underline are not wanted. */
   text-decoration: none; color: inherit;
 }
-.proj:hover { border-color: var(--accent-400); transform: translateY(-1px); }
+/* The star is a <button>, and a button cannot live inside the card's <a>, so
+   the two are siblings in .proj-cell and the star is positioned over the card.
+   Hover lifts the cell, which carries the star with it. */
+.proj-cell { position: relative; display: grid; transition: transform var(--t-fast); }
+.proj-cell:hover { transform: translateY(-1px); }
+.proj-cell:hover .proj { border-color: var(--accent-400); }
+.proj__fav {
+  position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; border-radius: var(--r-sm);
+  border: 1px solid transparent; background: transparent; color: var(--fg-subtle);
+  display: grid; place-items: center; transition: background var(--t-fast), color var(--t-fast);
+}
+.proj__fav:hover { background: var(--surface-3); color: var(--fg); }
+/* --warning-fg, not --warning: it is the one redefined for dark. */
+.proj__fav[aria-pressed="true"] { color: var(--warning-fg); }
+.proj__fav[aria-pressed="true"] .icon { fill: currentColor; }
+.proj__fav:disabled { opacity: .5; }
 .proj.is-missing { border-color: var(--danger); }
-.proj__name { font-weight: 650; font-size: var(--fs-md); display: flex; align-items: center; gap: var(--s-2); }
+.proj__name { font-weight: 650; font-size: var(--fs-md); display: flex; align-items: center; gap: var(--s-2); padding-right: var(--s-6); }
 .proj__path { font-family: var(--font-mono); font-size: 11px; color: var(--fg-subtle); overflow-wrap: anywhere; }
 .proj__stats { display: flex; gap: var(--s-3); font-size: var(--fs-xs); color: var(--fg-muted); flex-wrap: wrap; }
 .spinner {
@@ -49,7 +64,7 @@
 
 /* ---------- Workflow progression ---------- */
 .wf-track { display: flex; flex-wrap: wrap; align-items: stretch; gap: var(--s-2); }
-.wf-step { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: var(--s-3) var(--s-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); min-width: 120px; text-align: center; }
+.wf-step { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: var(--s-3) var(--s-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); flex: 0 1 auto; min-width: 120px; text-align: center; }
 .wf-step__name { font-family: var(--font-mono); font-size: var(--fs-sm); }
 .wf-step__reason { font-size: var(--fs-xs); color: var(--fg-muted); max-width: 220px; }
 .wf-step__time { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-muted); max-width: 220px; overflow-wrap: anywhere; }

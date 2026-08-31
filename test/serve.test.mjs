@@ -63,6 +63,8 @@ test('AC 2: a fresh machine loads the documented defaults', () => {
   const config = loadConfig(home);
   assert.deepEqual(config, {
     projects: [],
+    favorites: [],
+    projectNames: {},
     usageIntervalMinutes: 5,
     defaults: { model: 'opus', effort: 'high', permissionMode: 'default' },
   });
@@ -126,6 +128,43 @@ test('a config pinned to an exact model id keeps it; the UI list only holds alia
 test('duplicate paths are collapsed, case-insensitively', () => {
   const c = normalizeConfig({ projects: [PROJ_A, PROJ_A.toUpperCase(), '  '] });
   assert.equal(c.projects.length, 1);
+});
+
+// ── AC 5: projectNames ───────────────────────────────────────────────────────
+
+test('AC 5: a config without projectNames loads unchanged, defaulting to {}', () => {
+  const c = normalizeConfig({ projects: [PROJ_A] });
+  assert.deepEqual(c.projectNames, {});
+});
+
+test('AC 5: projectNames drops a key that does not resolve to a configured project', () => {
+  const c = normalizeConfig({
+    projects: [PROJ_A],
+    projectNames: { [path.join(FIXTURES, 'nowhere-at-all')]: 'Ghost' },
+  });
+  assert.deepEqual(c.projectNames, {});
+});
+
+test('AC 5: projectNames drops a non-string or blank name', () => {
+  const nonString = normalizeConfig({ projects: [PROJ_A], projectNames: { [PROJ_A]: 123 } });
+  assert.deepEqual(nonString.projectNames, {});
+  const blank = normalizeConfig({ projects: [PROJ_A], projectNames: { [PROJ_A]: '   ' } });
+  assert.deepEqual(blank.projectNames, {});
+});
+
+test('AC 5: projectNames resolves and case-matches the key against projects, and trims the name', () => {
+  const c = normalizeConfig({ projects: [PROJ_A], projectNames: { [PROJ_A.toUpperCase()]: '  Alpha  ' } });
+  assert.deepEqual(c.projectNames, { [path.resolve(PROJ_A)]: 'Alpha' });
+});
+
+test('AC 5: removing a project drops its projectNames entry on the next save', () => {
+  const home = tempHome();
+  saveConfig({ projects: [PROJ_A], projectNames: { [PROJ_A]: 'Alpha' } }, home);
+  assert.deepEqual(loadConfig(home).projectNames, { [path.resolve(PROJ_A)]: 'Alpha' });
+
+  saveConfig({ projects: [], projectNames: { [PROJ_A]: 'Alpha' } }, home);
+  assert.deepEqual(loadConfig(home).projectNames, {});
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 // ── AC 15: ids and path safety ───────────────────────────────────────────────
@@ -482,6 +521,94 @@ test('AC 2: PUT /api/config rejects a non-existent path with the reason and save
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /does not exist/);
     assert.deepEqual(loadConfig(home).projects, []);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+// ── AC 1: GET /api/fs/dirs ───────────────────────────────────────────────────
+
+test('AC 1: GET /api/fs/dirs lists immediate subdirectories only, sorted case-insensitively', async () => {
+  const home = tempHome();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-fsdirs-'));
+  fs.mkdirSync(path.join(dir, 'banana'));
+  fs.mkdirSync(path.join(dir, 'Apple'));
+  fs.mkdirSync(path.join(dir, 'cherry'));
+  fs.writeFileSync(path.join(dir, 'not-a-dir.txt'), 'x');
+  await withServer({ home }, async (get) => {
+    const res = await get('/api/fs/dirs?path=' + encodeURIComponent(dir));
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { dirs: ['Apple', 'banana', 'cherry'] });
+  });
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 1: GET /api/fs/dirs answers an empty list, never an error, for a file path, a missing path, a relative path, or a missing param', async () => {
+  const home = tempHome();
+  await withServer({ home }, async (get) => {
+    const filePath = path.join(__dirname, '..', 'src', 'serve.mjs');
+    const cases = [
+      '?path=' + encodeURIComponent(filePath),
+      '?path=' + encodeURIComponent(path.join(FIXTURES, 'nowhere-at-all')),
+      '?path=' + encodeURIComponent('relative/dir'),
+      '',
+    ];
+    for (const qs of cases) {
+      const res = await get('/api/fs/dirs' + qs);
+      assert.equal(res.status, 200, qs);
+      assert.deepEqual(await res.json(), { dirs: [] }, qs);
+    }
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 1: GET /api/fs/dirs requires the same session as every other /api route', async () => {
+  const home = tempHome();
+  await withServer({ home, otpSecret: generateSecret() }, async (get) => {
+    assert.equal((await get('/api/fs/dirs?path=' + encodeURIComponent(FIXTURES))).status, 401);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+// ── AC 6: custom project names ───────────────────────────────────────────────
+
+test('AC 6: PUT /api/config saves projectNames and GET returns it', async () => {
+  const home = tempHome();
+  await withServer({ home }, async (get) => {
+    const put = await get('/api/config', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projects: [PROJ_A], projectNames: { [PROJ_A]: 'Alpha Custom' } }),
+    });
+    assert.equal(put.status, 200);
+    assert.deepEqual((await put.json()).projectNames, { [path.resolve(PROJ_A)]: 'Alpha Custom' });
+    assert.deepEqual((await (await get('/api/config')).json()).projectNames, { [path.resolve(PROJ_A)]: 'Alpha Custom' });
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 6: the dashboard uses the custom name when set, basename otherwise', async () => {
+  const home = tempHome();
+  saveConfig({ projects: [PROJ_A, path.join(FIXTURES, 'proj-empty')], projectNames: { [PROJ_A]: 'Alpha Custom' } }, home);
+  await withServer({ home }, async (get) => {
+    const model = await (await get('/api/dashboard')).json();
+    const alpha = model.projects.find((p) => p.path === path.resolve(PROJ_A));
+    assert.equal(alpha.name, 'Alpha Custom');
+    const empty = model.projects.find((p) => p.path.endsWith('proj-empty'));
+    assert.equal(empty.name, path.basename(empty.path));
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('AC 6: a project jobs scan tags the project and its jobs with the custom name', async () => {
+  const home = tempHome();
+  saveConfig({ projects: [PROJ_A], projectNames: { [PROJ_A]: 'Alpha Custom' } }, home);
+  const pid = encodeProjectId(path.resolve(PROJ_A));
+  await withServer({ home }, async (get) => {
+    const model = await (await get(`/api/projects/${pid}/jobs`)).json();
+    assert.equal(model.name, 'Alpha Custom');
+    const all = model.today.concat(model.notStarted, model.others);
+    assert.ok(all.length >= 1);
+    assert.ok(all.every((j) => j.projectName === 'Alpha Custom'));
   });
   fs.rmSync(home, { recursive: true, force: true });
 });

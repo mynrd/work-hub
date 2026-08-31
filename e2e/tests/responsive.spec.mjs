@@ -286,6 +286,31 @@ test('at 560px the workflow track runs down the page instead of wrapping', async
   }
 });
 
+test('a maximised dialog on a wide screen keeps the whole track on one row', async ({ page }) => {
+  // .modal__fixed-inner used to cap the track at 1040px, so the 4th step wrapped
+  // onto a row of its own while the dialog still had hundreds of pixels spare.
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await goto(page, '#/');
+  await goto(page, `#/p/${await projectId(page, 'proj-a')}`);
+  await jobRow(page, 'A job touched today').click();
+  await page.locator('#detailFullscreenBtn').click();
+  await expect(page.locator('#detailFullscreenBtn')).toHaveAttribute('aria-pressed', 'true');
+  // max-width is transitioned, so the steps only settle once the dialog has
+  // finished widening.
+  await expect
+    .poll(async () => (await page.locator('#detailWorkflow .wf-track').boundingBox()).width)
+    .toBeGreaterThan(1400);
+
+  const steps = page.locator('#detailWorkflow .wf-step');
+  await expect(steps).toHaveCount(4);
+  const boxes = await Promise.all((await steps.all()).map((s) => s.boundingBox()));
+  for (const box of boxes) {
+    expect(Math.round(box.y), "every step shares the first step's row").toBe(Math.round(boxes[0].y));
+  }
+
+  await page.locator('#detailFullscreenBtn').click(); // the flag is stored, so leave it off
+});
+
 test('no route scrolls sideways at any width worth supporting', async ({ page }) => {
   for (const viewport of [NARROW, PHONE, { width: 768, height: 1024 }, TABLET]) {
     await page.setViewportSize(viewport);

@@ -3,7 +3,7 @@
 
 import { esc, emptyState, errorCard } from '../dom.mjs';
 import { state, timers } from '../state.mjs';
-import { loadConfig, loadDashboard, loadUsage } from '../data.mjs';
+import { loadConfig, loadDashboard, loadUsage, setProjectFavorite } from '../data.mjs';
 import { registerView, renderCurrentPage, setApp } from '../render.mjs';
 import { usageCardHtml, wireUsageCard } from '../components/usage-card.mjs';
 
@@ -25,14 +25,42 @@ function projectsStripHtml(projects) {
   }
   return '<div class="card mb-5">' + head + '<div class="card__body"><div class="strip">' +
     filtered.map(function (p) {
-      return '<a class="proj' + (p.missing ? ' is-missing' : '') + '" href="#/p/' + esc(p.id) + '">' +
-        '<span class="proj__name">' + esc(p.name) + '</span>' +
-        '<span class="proj__path">' + esc(p.path) + '</span>' +
-        (p.missing
-          ? '<span class="badge badge-danger">folder is missing</span>'
-          : (p.hasWorkDir ? '' : '<span class="proj__stats"><span class="badge badge-neutral">no .work/</span></span>')) +
-      '</a>';
+      var starred = Boolean(p.favorite);
+      return '<div class="proj-cell">' +
+        '<a class="proj' + (p.missing ? ' is-missing' : '') + '" href="#/p/' + esc(p.id) + '">' +
+          '<span class="proj__name">' + esc(p.name) + '</span>' +
+          '<span class="proj__path">' + esc(p.path) + '</span>' +
+          (p.missing
+            ? '<span class="badge badge-danger">folder is missing</span>'
+            : (p.hasWorkDir ? '' : '<span class="proj__stats"><span class="badge badge-neutral">no .work/</span></span>')) +
+        '</a>' +
+        '<button type="button" class="proj__fav" data-fav="' + esc(p.id) + '"' +
+          ' aria-pressed="' + (starred ? 'true' : 'false') + '"' +
+          ' aria-label="' + (starred ? 'Unstar ' : 'Star ') + esc(p.name) + '"' +
+          ' title="' + (starred ? 'Remove from favourites' : 'Add to favourites') + '">' +
+          '<svg class="icon icon-sm"><use href="#i-star"/></svg></button>' +
+      '</div>';
     }).join('') + '</div></div></div>';
+}
+
+// One listener on the strip rather than one per card: the whole dashboard is an
+// innerHTML rewrite every 30s, so anything bound to a card dies with it.
+function wireProjectStars() {
+  var strip = document.querySelector('.strip');
+  if (!strip) return;
+  strip.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('.proj__fav') : null;
+    if (!btn || !strip.contains(btn)) return;
+    e.preventDefault();   // the star sits over an <a>
+    e.stopPropagation();
+    if (btn.disabled) return;
+    btn.disabled = true;
+    setProjectFavorite(btn.getAttribute('data-fav'), btn.getAttribute('aria-pressed') !== 'true')
+      .then(renderCurrentPage, function (err) {
+        btn.disabled = false;
+        state.error = err.message;
+      });
+  });
 }
 
 function renderDashboard() {
@@ -47,6 +75,7 @@ function renderDashboard() {
     projectsStripHtml(d.projects)
   );
   wireUsageCard();
+  wireProjectStars();
 }
 
 function enterDashboard() {

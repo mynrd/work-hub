@@ -14,6 +14,10 @@ export function saveConfig(patch) {
     usageIntervalMinutes: patch.usageIntervalMinutes !== undefined ? patch.usageIntervalMinutes : state.config.usageIntervalMinutes,
     defaults: patch.defaults !== undefined ? patch.defaults : state.config.defaults,
   };
+  // projectNames is optional and additive - only sent when the caller built one, so a
+  // save that has nothing to do with names does not force the field into existence.
+  if (patch.projectNames !== undefined) next.projectNames = patch.projectNames;
+  else if (state.config.projectNames !== undefined) next.projectNames = state.config.projectNames;
   return api('/api/config', { method: 'PUT', body: JSON.stringify(next) })
     .then(function (saved) {
       state.config = Object.assign({}, state.config, saved);
@@ -38,6 +42,16 @@ export function loadDashboard() {
   return api('/api/dashboard').then(function (d) { state.dashboard = d; }).catch(function (err) {
     state.error = err.message;
   });
+}
+
+/** Stars or unstars one folder. The server answers with the whole dashboard,
+ *  already re-sorted, so the strip repaints from the write rather than waiting
+ *  for the 30s poll to agree. */
+export function setProjectFavorite(pid, favorite) {
+  return api('/api/projects/' + encodeURIComponent(pid) + '/favorite', {
+    method: 'PUT',
+    body: JSON.stringify({ favorite: favorite }),
+  }).then(function (d) { state.dashboard = d; return d; });
 }
 
 export function loadJobs(pid) {

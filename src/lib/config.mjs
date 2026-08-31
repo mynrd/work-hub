@@ -29,6 +29,8 @@ export const PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermis
 
 const DEFAULTS = {
   projects: [],
+  favorites: [],
+  projectNames: {},
   usageIntervalMinutes: 5,
   defaults: { model: 'opus', effort: 'high', permissionMode: 'default' },
 };
@@ -64,6 +66,41 @@ function normalizeProjects(value) {
   return out;
 }
 
+/** Favourites are paths, not ids, so they survive the id encoding changing. One
+ *  that is no longer a monitored folder is dropped rather than kept as a ghost. */
+function normalizeFavorites(value, projects) {
+  const known = new Map(projects.map((p) => [p.toLowerCase(), p]));
+  const seen = new Set();
+  const out = [];
+  for (const entry of normalizeProjects(value)) {
+    const key = entry.toLowerCase();
+    const hit = known.get(key);
+    if (!hit || seen.has(key)) continue;
+    seen.add(key);
+    out.push(hit);
+  }
+  return out;
+}
+
+/** A custom display name per project, keyed by the project's resolved path so it
+ *  survives id encoding changing. A key that no longer names a monitored folder,
+ *  or a name that is not a non-empty string once trimmed, is dropped rather than
+ *  kept as a ghost - mirrors `normalizeFavorites` above, but as a map. */
+function normalizeProjectNames(value, projects) {
+  const known = new Map(projects.map((p) => [p.toLowerCase(), p]));
+  const src = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const out = {};
+  for (const [rawKey, rawName] of Object.entries(src)) {
+    const hit = known.get(path.resolve(rawKey).toLowerCase());
+    if (!hit) continue;
+    if (typeof rawName !== 'string') continue;
+    const name = rawName.trim();
+    if (!name) continue;
+    out[hit] = name;
+  }
+  return out;
+}
+
 function normalizeDefaults(value) {
   const src = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   return {
@@ -84,8 +121,11 @@ function normalizeInterval(value) {
 /** Coerces any parsed JSON into the config shape. Never throws. */
 export function normalizeConfig(raw) {
   const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const projects = normalizeProjects(src.projects);
   return {
-    projects: normalizeProjects(src.projects),
+    projects,
+    favorites: normalizeFavorites(src.favorites, projects),
+    projectNames: normalizeProjectNames(src.projectNames, projects),
     usageIntervalMinutes: normalizeInterval(src.usageIntervalMinutes),
     defaults: normalizeDefaults(src.defaults),
   };

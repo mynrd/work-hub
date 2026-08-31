@@ -39,6 +39,9 @@ test('the composer defaults show what the config holds', async ({ page }) => {
 test('a path that is not a folder is refused, with the reason', async ({ page }) => {
   await page.locator('#newProjectInput').fill(path.join(os.tmpdir(), 'definitely-not-a-real-folder-xyz'));
   await page.locator('#addProjectBtn').click();
+  // Add folder opens the name dialog first; the refusal comes from the save.
+  await expect(page.locator('#projectNameOverlay')).toHaveClass(/is-open/);
+  await page.locator('#projectNameSaveBtn').click();
   await expect(page.locator('#settingsError')).toBeVisible();
   await expect(page.locator('#settingsError')).not.toBeEmpty();
 });
@@ -70,6 +73,11 @@ test.describe('config state', () => {
     try {
       await page.locator('#newProjectInput').fill(folder);
       await page.locator('#addProjectBtn').click();
+      // Add folder now opens the name dialog rather than saving straight away;
+      // the default name (the folder's basename) is accepted as-is.
+      await expect(page.locator('#projectNameOverlay')).toHaveClass(/is-open/);
+      await expect(page.locator('#projectNameInput')).toHaveValue(path.basename(folder));
+      await page.locator('#projectNameSaveBtn').click();
       await expect(rows).toHaveCount(before + 1);
       await expect(rows.filter({ hasText: path.basename(folder) })).toHaveCount(1);
 
@@ -124,6 +132,7 @@ test.describe('config state', () => {
     try {
       await page.locator('#newProjectInput').fill(folder);
       await page.locator('#addProjectBtn').click();
+      await page.locator('#projectNameSaveBtn').click();
       await expect(rows).toHaveCount(before + 1);
       added = true;
 
@@ -148,6 +157,7 @@ test.describe('config state', () => {
       try {
         await page.locator('#newProjectInput').fill(other);
         await page.locator('#addProjectBtn').click();
+        await page.locator('#projectNameSaveBtn').click();
         await expect(page.locator('#settingsError')).toContainText(name);
         await expect(rows).toHaveCount(before + 1);
       } finally {
@@ -178,5 +188,123 @@ test.describe('config state', () => {
       await page.locator('#saveDefaultsBtn').click();
       await expect(page.locator('#defaultsSaved')).toBeVisible();
     }
+  });
+});
+
+/* The new-folder input's directory suggestions and the project-name dialog.
+   Both GET /api/fs/dirs and the config PUT are stubbed, so - unlike the
+   "config state" block above - nothing here touches the real config.json and
+   both viewport projects can run it in parallel. */
+test.describe('directory suggestions and the name dialog', () => {
+  const input = (page) => page.locator('#newProjectInput');
+  const suggest = (page) => page.locator('#projectSuggest');
+  const nameDialog = (page) => ({
+    overlay: page.locator('#projectNameOverlay'),
+    input: page.locator('#projectNameInput'),
+    save: page.locator('#projectNameSaveBtn'),
+    cancel: page.locator('#projectNameCancelBtn'),
+  });
+
+  async function stubDirs(page, dirs) {
+    await page.route('**/api/fs/dirs*', async (route) => {
+      if (route.request().method() !== 'GET') { await route.continue(); return; }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ dirs }) });
+    });
+  }
+
+  test('suggestions appear after a trailing separator and filter as you type', async ({ page }) => {
+    await stubDirs(page, ['alpha', 'alpha-two', 'beta']);
+    await input(page).fill('D:\\Work\\');
+    await expect(suggest(page).locator('.suggest-list__item')).toHaveCount(3);
+    await expect(suggest(page).locator('.suggest-list__item')).toHaveText(['alpha', 'alpha-two', 'beta']);
+
+    await input(page).fill('D:\\Work\\al');
+    await expect(suggest(page).locator('.suggest-list__item')).toHaveText(['alpha', 'alpha-two']);
+  });
+
+  test('ArrowDown then Enter inserts the highlighted folder and a separator, without adding a project', async ({ page }) => {
+    await stubDirs(page, ['alpha', 'beta']);
+    const puts = [];
+    page.on('request', (r) => { if (r.method() === 'PUT') puts.push(r.url()); });
+
+    await input(page).fill('D:\\Work\\');
+    await expect(suggest(page).locator('.suggest-list__item')).toHaveCount(2);
+    await input(page).press('ArrowDown'); // moves off the default first item onto "beta"
+    await input(page).press('Enter');
+
+    await expect(input(page)).toHaveValue('D:\\Work\\beta\\');
+    await expect(suggest(page)).toBeHidden();
+    expect(puts).toEqual([]);
+  });
+
+  test('clicking a suggestion inserts it and a separator, the same as Enter', async ({ page }) => {
+    await stubDirs(page, ['alpha', 'beta']);
+    await input(page).fill('D:\\Work\\');
+    await expect(suggest(page).locator('.suggest-list__item')).toHaveCount(2);
+    await suggest(page).locator('.suggest-list__item', { hasText: 'beta' }).click();
+    await expect(input(page)).toHaveValue('D:\\Work\\beta\\');
+    await expect(suggest(page)).toBeHidden();
+  });
+
+  test('Escape closes the suggestion list', async ({ page }) => {
+    await stubDirs(page, ['alpha', 'beta']);
+    await input(page).fill('D:\\Work\\');
+    await expect(suggest(page).locator('.suggest-list__item')).toHaveCount(2);
+    await input(page).press('Escape');
+    await expect(suggest(page)).toBeHidden();
+  });
+
+  test('Add folder opens the name dialog prefilled with the basename', async ({ page }) => {
+    await input(page).fill('D:\\Work\\git\\mynrd\\some-repo');
+    await page.locator('#addProjectBtn').click();
+    const dlg = nameDialog(page);
+    await expect(dlg.overlay).toHaveClass(/is-open/);
+    await expect(dlg.input).toHaveValue('some-repo');
+  });
+
+  test('Save sends the folder and the chosen name to the config PUT, and adds the row', async ({ page }) => {
+    const folder = 'D:\\Work\\git\\mynrd\\some-repo';
+    let putBody = null;
+    await page.route('**/api/config', async (route) => {
+      if (route.request().method() !== 'PUT') { await route.continue(); return; }
+      putBody = route.request().postDataJSON();
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(putBody) });
+    });
+
+    await input(page).fill(folder);
+    await page.locator('#addProjectBtn').click();
+    const dlg = nameDialog(page);
+    await dlg.input.fill('Some Repo');
+    await dlg.save.click();
+
+    await expect(dlg.overlay).not.toHaveClass(/is-open/);
+    expect(putBody.projects).toContain(folder);
+    expect(putBody.projectNames[folder]).toBe('Some Repo');
+
+    const rows = cardTitled(page, 'Monitored folders').locator('tbody tr');
+    await expect(rows.filter({ hasText: 'some-repo' })).toHaveCount(1);
+  });
+
+  test('Cancel closes the dialog and saves nothing; Escape does the same', async ({ page }) => {
+    const puts = [];
+    page.on('request', (r) => { if (r.method() === 'PUT') puts.push(r.url()); });
+    const dlg = nameDialog(page);
+
+    await input(page).fill('D:\\Work\\git\\mynrd\\cancel-me');
+    await page.locator('#addProjectBtn').click();
+    await expect(dlg.overlay).toHaveClass(/is-open/);
+    await dlg.cancel.click();
+    await expect(dlg.overlay).not.toHaveClass(/is-open/);
+
+    await input(page).fill('D:\\Work\\git\\mynrd\\escape-me');
+    await page.locator('#addProjectBtn').click();
+    await expect(dlg.overlay).toHaveClass(/is-open/);
+    await page.keyboard.press('Escape');
+    await expect(dlg.overlay).not.toHaveClass(/is-open/);
+
+    expect(puts).toEqual([]);
+    const rows = cardTitled(page, 'Monitored folders').locator('tbody tr');
+    await expect(rows.filter({ hasText: 'cancel-me' })).toHaveCount(0);
+    await expect(rows.filter({ hasText: 'escape-me' })).toHaveCount(0);
   });
 });

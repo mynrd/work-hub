@@ -76,7 +76,10 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-base);
 .modal__head p { font-size: var(--fs-sm); color: var(--fg-muted); margin-top: var(--s-2); }
 .modal__body { flex: 1 1 auto; min-height: 0; padding: var(--s-5); display: flex; flex-direction: column; gap: var(--s-4); overflow: hidden; }
 .modal__fixed { flex: 0 0 auto; padding-bottom: var(--s-4); border-bottom: 1px solid var(--border); }
-.modal__fixed-inner { max-width: 1040px; }
+/* The meta pairs read badly as one very long line, so they keep the 1040px
+   cap. The workflow track under them does not - capping it wrapped the 4th
+   step onto its own row while the dialog still had 800px to spare. */
+.modal__fixed-inner > .kv { max-width: 1040px; }
 .modal__panels { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 
 /* ---------- Key/value ---------- */
@@ -134,6 +137,20 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-base);
 
 /* ---------- Docs toolbar (file chips + reader toggle) ---------- */
 .docs-toolbar { justify-content: space-between; }
+
+/* ---------- Directory suggestions (Settings: new-project input) ---------- */
+.field-suggest { position: relative; }
+.field-suggest > .input { width: 100%; }
+.suggest-list {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 40;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  box-shadow: var(--shadow-md); max-height: 220px; overflow-y: auto; padding: var(--s-1) 0;
+}
+.suggest-list__item {
+  display: block; width: 100%; text-align: left; padding: var(--s-2) var(--s-4);
+  background: none; border: none; color: var(--fg); font-size: var(--fs-sm); font-family: var(--font-mono);
+}
+.suggest-list__item:hover, .suggest-list__item.is-active { background: var(--surface-2); }
 
 /* ---------- Code block ---------- */
 .code-block { position: relative; }
