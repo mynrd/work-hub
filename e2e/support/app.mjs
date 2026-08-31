@@ -94,3 +94,35 @@ export const gitPane = (page) => ({
 /** A job row by the title shown in its Title cell. */
 export const jobRow = (page, title) =>
   page.locator('tr[data-folder]').filter({ has: page.locator('td.cell-title', { hasText: title }) });
+
+/** The project page's Terminal tab: a strip of real shells, one xterm each. */
+export const terminalPane = (page) => ({
+  card: page.locator('#termCard'),
+  strip: page.locator('#termStrip'),
+  tabs: page.locator('.term-tab[data-shell]'),
+  tab: (shellId) => page.locator(`.term-tab[data-shell="${shellId}"]`),
+  tabLabel: (shellId) => page.locator(`.term-tab[data-shell="${shellId}"] .term-tab__label`),
+  closeBtn: (shellId) => page.locator(`.term-tab[data-shell="${shellId}"] [data-close]`),
+  newBtn: page.locator('#termNewBtn'),
+  host: page.locator('#termHost'),
+  restartBtn: page.locator('#termRestartBtn'),
+  status: page.locator('#termPaneStatus'),
+});
+
+/** The topbar's Processes dialog - every shell Work Hub has open, everywhere. */
+export const processesDialog = (page) => ({
+  openBtn: page.locator('#processesBtn'),
+  overlay: page.locator('#processesOverlay'),
+  closeBtn: page.locator('#processesCloseBtn'),
+  refreshBtn: page.locator('#processesRefreshBtn'),
+  killAllBtn: page.locator('#processesKillAllBtn'),
+  killAllLabel: page.locator('#processesKillAllLabel'),
+  rows: page.locator('.proc-row'),
+  /** The row for one of our own shells, found by its kill button - not by
+   *  position, since a machine with another Work Hub instance open may list
+   *  stragglers this suite did not create. */
+  rowFor: (shellId) => page.locator('.proc-row').filter({ has: page.locator(`[data-kill-shell="${shellId}"]`) }),
+  killShellBtn: (shellId) => page.locator(`[data-kill-shell="${shellId}"]`),
+  /** The project-name link on a row - opens that project's Terminal tab. */
+  projLink: (projectId) => page.locator(`.proc-row__proj[data-proj="${projectId}"]`),
+});

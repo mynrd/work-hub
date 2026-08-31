@@ -11,6 +11,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { configDir } from '../../src/lib/config.mjs';
+
 import { encodeProjectFolder } from '../../src/lib/transcripts.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -71,7 +73,7 @@ export const AWAITING_VERIFY_JOB = {
   },
 };
 
-export const PORTS = { open: 5178, gated: 5179 };
+export const PORTS = { open: 5178, gated: 5179, control: 5180 };
 
 function copyDir(from, to) {
   fs.mkdirSync(to, { recursive: true });
@@ -192,6 +194,35 @@ export function buildTestEnv() {
   return { home, projA, projEmpty };
 }
 
+/**
+ * The shell-host daemon (src/shell-host.mjs) is a detached process, spawned
+ * on first Terminal use by whichever server's shell-client needed it - see
+ * the HOME/USERPROFILE override in start-server.mjs for why it lands in this
+ * temp home's `.work-hub/shell-host.json` instead of the real one. A leaked
+ * daemon holds real pwsh processes open on the machine running the suite, so
+ * it is killed - tree and all, tolerating "already gone" - before the temp
+ * home it lives under is removed.
+ */
+function stopShellHost(home) {
+  let info;
+  try {
+    info = JSON.parse(fs.readFileSync(path.join(configDir(home), 'shell-host.json'), 'utf8'));
+  } catch {
+    return; // no daemon was ever spawned into this home
+  }
+  if (!info || !info.pid) return;
+  try {
+    if (process.platform === 'win32') {
+      execFileSync('taskkill', ['/PID', String(info.pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      process.kill(info.pid, 'SIGKILL');
+    }
+  } catch {
+    /* already exited - fine */
+  }
+}
+
 export function cleanTestEnv(env) {
+  stopShellHost(env.home);
   fs.rmSync(env.home, { recursive: true, force: true });
 }

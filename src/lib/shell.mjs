@@ -6,7 +6,9 @@
 // shell is keyed by a generated shellId, not by project, so a project's
 // Terminal tab can open a `Terminal 1 | Terminal 2 | +` strip. Everything a
 // shell prints is kept in a bounded replay buffer and pushed to every attached
-// listener; everything typed on the page is written to the pty's stdin.
+// listener; everything typed on the page is written to the pty's stdin. Each
+// shell also carries a user-set `name` (null until renamed) purely for the tab
+// strip label - it never touches the spawned command or the marker.
 //
 // This is the file's whole security story: the browser sends raw keystrokes
 // and the server feeds them to a shell running as the user. That is arbitrary
@@ -38,6 +40,9 @@ const MAX_INPUT_BYTES = 16 * 1024;
 
 /** A ceiling so a stuck "+" cannot spawn shells without bound. */
 const MAX_SHELLS = 40;
+
+/** A tab name is cosmetic, not a path or an argument - the cap just keeps a tab strip readable. */
+const MAX_NAME_LENGTH = 60;
 
 const MIN_DIM = 2;
 const MAX_DIM = 500;
@@ -102,6 +107,7 @@ export function createShellRegistry({
       rows: shell.rows,
       startedAt: shell.startedAt,
       exitCode: shell.exitCode,
+      name: shell.name,
     };
   }
 
@@ -153,6 +159,7 @@ export function createShellRegistry({
       buffer: '',
       listeners: new Set(),
       pty: null,
+      name: null,
     };
 
     let proc;
@@ -245,6 +252,20 @@ export function createShellRegistry({
     return publicView(shells.get(shellId));
   }
 
+  /**
+   * Sets or clears a shell's tab name. Works on an exited shell too - a closed
+   * tab keeps showing its last name until the tab itself is removed, and there
+   * is no reason to forbid renaming it in the meantime.
+   * @returns {{ ok: true } | { ok: false, status: number, error: string }}
+   */
+  function rename(shellId, name) {
+    const shell = shells.get(shellId);
+    if (!shell) return { ok: false, status: 404, error: 'No such shell.' };
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    shell.name = trimmed ? trimmed.slice(0, MAX_NAME_LENGTH) : null;
+    return { ok: true };
+  }
+
   /** Every live shell, newest last (insertion order). For the Processes list. */
   function list() {
     return [...shells.values()].map(publicView);
@@ -260,5 +281,5 @@ export function createShellRegistry({
     for (const id of [...shells.keys()]) kill(id);
   }
 
-  return { open, attach, write, resize, kill, status, list, listForProject, killAll, size: () => shells.size };
+  return { open, attach, write, resize, kill, rename, status, list, listForProject, killAll, size: () => shells.size };
 }

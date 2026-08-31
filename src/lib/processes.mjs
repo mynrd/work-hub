@@ -2,16 +2,20 @@
 // this server started it or a previous run did.
 //
 // Two sources, merged:
-//   1. The in-memory registry (shell.mjs) - the shells THIS server owns. It
-//      knows the project, the shellId, and whether a page is attached.
+//   1. `registry.list()` - every shell the shell host daemon owns (see
+//      shell-host.mjs; `registry` here is usually the client from
+//      shell-client.mjs, not the in-process shell.mjs registry directly). It
+//      knows the project, the shellId, and whether a page is attached. Since
+//      the daemon survives a server restart, this list survives one too.
 //   2. On Windows, a WMI query for any `pwsh.exe` whose command line carries
-//      the WORK_HUB_SHELL marker. This is OS truth: it survives a server
-//      restart and catches a shell that detached and outlived its ConPTY.
+//      the WORK_HUB_SHELL marker. This is OS truth: it survives the daemon
+//      itself dying and catches a shell that detached and outlived its ConPTY.
 //
 // A row the registry knows is `source: 'session'` and is killed by shellId
-// (registry.kill, which closes the pty cleanly). A row only WMI knows is
-// `source: 'external'` - a straggler from a past run - and is killed by pid
-// with `taskkill /T /F`, because this server has no pty handle to it.
+// (registry.kill, which closes the pty cleanly) - "session" now means "the
+// daemon", not "this server process". A row only WMI knows is `source:
+// 'external'` - a straggler the daemon itself lost track of - and is killed by
+// pid with `taskkill /T /F`, because nothing here has a pty handle to it.
 //
 // Everything on the command line here is a fixed literal; the only variable
 // that reaches a command is a pid, validated as a positive integer first.
@@ -88,11 +92,12 @@ export async function scanMarkedProcesses({ platform = process.platform } = {}) 
  * The unified Processes list. Registry shells first (this session), then any
  * marked pwsh the OS knows that the registry does not (stragglers).
  *
- * @param registry the shell registry (for `.list()`)
+ * @param registry the shell registry or shell host client (for `.list()`,
+ *                 sync or async - either works, since this always awaits it)
  * @param nameOf   (projectId) => display name, or undefined
  */
 export async function listProcesses({ registry, nameOf = () => undefined, platform = process.platform } = {}) {
-  const session = registry.list();
+  const session = await registry.list();
   const sessionPids = new Set(session.map((s) => s.pid).filter((p) => p !== null));
   const sessionShellIds = new Set(session.map((s) => s.shellId));
 

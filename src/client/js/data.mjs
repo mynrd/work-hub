@@ -54,6 +54,16 @@ export function setProjectFavorite(pid, favorite) {
   }).then(function (d) { state.dashboard = d; return d; });
 }
 
+/** Replaces the dashboard group list - create, rename, delete, and drag all go
+ *  through this one write. Same contract as the favourite PUT: the server
+ *  answers with the whole dashboard, so the page repaints from the response. */
+export function saveGroups(groups) {
+  return api('/api/groups', {
+    method: 'PUT',
+    body: JSON.stringify({ groups: groups }),
+  }).then(function (d) { state.dashboard = d; return d; });
+}
+
 export function loadJobs(pid) {
   return api('/api/projects/' + encodeURIComponent(pid) + '/jobs')
     .then(function (data) { state.jobs[pid] = data; })

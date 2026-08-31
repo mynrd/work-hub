@@ -48,12 +48,22 @@ function tabName(pid, sid, i) {
   return proj(pid).names[sid] || ('Terminal ' + (i + 1));
 }
 
+/** A tab is dead once its shell has exited - either the stream told us so
+    (pane.status), or the server's shell list already said it was not running
+    before the pane's own stream had a chance to confirm anything. */
+function isPaneDead(pane) {
+  if (!pane) return false;
+  if (pane.status === 'exited') return true;
+  return pane.serverRunning === false;
+}
+
 function stripInnerHtml(pid) {
   var p = proj(pid);
   return p.shells.map(function (sid, i) {
     var active = sid === p.active;
     var name = tabName(pid, sid, i);
-    return '<button type="button" class="term-tab' + (active ? ' is-active' : '') + '" data-shell="' + esc(sid) + '" title="' + esc(name) + ' (double-click to rename)">' +
+    var dead = isPaneDead(panes[sid]);
+    return '<button type="button" class="term-tab' + (active ? ' is-active' : '') + (dead ? ' term-tab--dead' : '') + '" data-shell="' + esc(sid) + '" title="' + esc(name) + ' (double-click to rename)">' +
       '<span class="term-tab__label">' + esc(name) + '</span>' +
       '<span class="term-tab__close" data-close="' + esc(sid) + '" title="Close this terminal" aria-label="Close">&times;</span>' +
     '</button>';
@@ -135,6 +145,10 @@ function streamOutput(pane) {
       pane.status = 'exited';
       pane.term.write('\r\n\x1b[90m[shell exited' + (event.exitCode === null || event.exitCode === undefined ? '' : ' with code ' + event.exitCode) + ' - Restart starts a new one]\x1b[0m\r\n');
       setStatus(pane, '', false);
+      // Grey the tab, but only if this project's terminal tab is the one
+      // currently on screen - repaintStrip always targets #termStrip, which
+      // belongs to whichever project's terminal view is live right now.
+      if (terminalPaneIsLive(pane.projectId)) repaintStrip(pane.projectId);
     }
   }
 
@@ -190,7 +204,7 @@ function postResize(pane) {
 
 // ── Pane (one xterm per shell) ─────────────────────────────────────────────
 
-function createPane(projectId, shellId) {
+function createPane(projectId, shellId, serverRunning) {
   var pane = {
     projectId: projectId,
     shellId: shellId,
@@ -204,6 +218,11 @@ function createPane(projectId, shellId) {
     flushing: false,
     streamAbort: null,
     retries: 0,
+    // Whether the server's shell list already reported this shell as running
+    // when the pane was created. Defaults true (a freshly opened shell always
+    // is); an adopted, already-exited shell is created with this false so its
+    // tab greys immediately, before the stream's own exit event confirms it.
+    serverRunning: serverRunning !== false,
   };
   pane.container.className = 'term-screen';
   panes[shellId] = pane;
@@ -331,23 +350,30 @@ function forgetShell(pid, shellId) {
   if (p.active === shellId) p.active = p.shells.length ? p.shells[p.shells.length - 1] : null;
 }
 
-/** First visit to a project's terminal tab: adopt whatever shells the server
-    already holds (from an earlier visit or another browser), else open one. */
+/** First visit to a project's terminal tab: adopt every shell the server
+    already holds for it - running or already exited, from an earlier visit,
+    a server restart, or another browser - else open one. */
 function loadProjectShells(pid) {
   var p = proj(pid);
   p.loaded = true;
   return api('/api/projects/' + encodeURIComponent(pid) + '/shells').then(function (data) {
-    var live = (data.shells || []).filter(function (s) { return s.running; });
-    if (live.length) {
-      live.forEach(function (s) {
-        if (!panes[s.shellId]) { p.shells.push(s.shellId); createPane(pid, s.shellId); }
-      });
-      if (!p.active || p.shells.indexOf(p.active) === -1) p.active = p.shells[0];
-      repaintStrip(pid);
-      mountActive(pid);
-      return;
+    var all = data.shells || [];
+    if (!all.length) return openNewShell(pid);
+    all.forEach(function (s) {
+      if (s.name) p.names[s.shellId] = s.name;
+      if (!panes[s.shellId]) {
+        p.shells.push(s.shellId);
+        createPane(pid, s.shellId, s.running);
+      }
+    });
+    if (!p.active || p.shells.indexOf(p.active) === -1) {
+      // The first running shell wins the active tab; only fall back to an
+      // exited one when nothing on the list is still running.
+      var runningFirst = all.filter(function (s) { return s.running; })[0];
+      p.active = runningFirst ? runningFirst.shellId : p.shells[0];
     }
-    return openNewShell(pid);
+    repaintStrip(pid);
+    mountActive(pid);
   }).catch(function () { return openNewShell(pid); });
 }
 
@@ -417,6 +443,14 @@ function startRename(pid, tab) {
     if (save) {
       var v = input.value.trim();
       if (v) proj(pid).names[sid] = v; else delete proj(pid).names[sid];
+      // Fire-and-forget: the label already updated locally above, and a
+      // failure here is rare enough (and cosmetic enough) that it only needs
+      // to surface on the pane's own status line, not block the rename.
+      api(shellUrl(sid, 'rename'), { method: 'POST', body: JSON.stringify({ name: v }) })
+        .catch(function (err) {
+          var pane = panes[sid];
+          if (pane) setStatus(pane, 'Saving the tab name failed: ' + err.message, true);
+        });
     }
     repaintStrip(pid);
   }

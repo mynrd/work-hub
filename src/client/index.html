@@ -48,6 +48,7 @@
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
   <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.9 5.9 6.6.9-4.8 4.6 1.2 6.5-5.9-3.1-5.9 3.1 1.2-6.5L2.5 9.8l6.6-.9z"/></symbol>
   <symbol id="i-book" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></symbol>
 </svg>
 
 
@@ -150,6 +151,9 @@
         <p>Shells Work Hub started. A restart of the app closes the ones it owns; a straggler that outlived it shows here too.</p>
       </div>
       <div class="row gap-2">
+        <button type="button" class="btn btn-danger btn-sm" id="processesKillAllBtn" title="Kill every shell Work Hub has open, everywhere">
+          <svg class="icon icon-sm"><use href="#i-x"/></svg> <span id="processesKillAllLabel">Kill all</span>
+        </button>
         <button type="button" class="btn btn-secondary btn-sm" id="processesRefreshBtn" title="Re-scan">
           <svg class="icon icon-sm"><use href="#i-refresh"/></svg> <span id="processesRefreshLabel">Refresh</span>
         </button>

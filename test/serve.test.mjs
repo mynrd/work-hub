@@ -65,6 +65,7 @@ test('AC 2: a fresh machine loads the documented defaults', () => {
     projects: [],
     favorites: [],
     projectNames: {},
+    groups: [],
     usageIntervalMinutes: 5,
     defaults: { model: 'opus', effort: 'high', permissionMode: 'default' },
   });
@@ -164,6 +165,54 @@ test('AC 5: removing a project drops its projectNames entry on the next save', (
 
   saveConfig({ projects: [], projectNames: { [PROJ_A]: 'Alpha' } }, home);
   assert.deepEqual(loadConfig(home).projectNames, {});
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+// ── Dashboard groups ─────────────────────────────────────────────────────────
+
+test('groups: a fresh config has none, and a non-array is coerced to none', () => {
+  assert.deepEqual(normalizeConfig({ projects: [PROJ_A] }).groups, []);
+  assert.deepEqual(normalizeConfig({ projects: [PROJ_A], groups: 'nope' }).groups, []);
+});
+
+test('groups: a member path that is not a monitored folder is dropped; an empty group is kept', () => {
+  const c = normalizeConfig({
+    projects: [PROJ_A],
+    groups: [
+      { name: 'Alpha', projects: [path.join(FIXTURES, 'nowhere-at-all')] },
+      { name: 'mynrd', projects: [PROJ_A.toUpperCase()] },
+    ],
+  });
+  assert.deepEqual(c.groups, [
+    { name: 'Alpha', projects: [] },
+    { name: 'mynrd', projects: [path.resolve(PROJ_A)] },
+  ]);
+});
+
+test('groups: a path claimed by an earlier group stays there, and a duplicate name is dropped', () => {
+  const c = normalizeConfig({
+    projects: [PROJ_A],
+    groups: [
+      { name: '  Alpha  ', projects: [PROJ_A] },
+      { name: 'mynrd', projects: [PROJ_A] },
+      { name: 'alpha', projects: [] },
+      { name: '   ', projects: [] },
+      'not-an-object',
+    ],
+  });
+  assert.deepEqual(c.groups, [
+    { name: 'Alpha', projects: [path.resolve(PROJ_A)] },
+    { name: 'mynrd', projects: [] },
+  ]);
+});
+
+test('groups: removing a project drops it from its group on the next save', () => {
+  const home = tempHome();
+  saveConfig({ projects: [PROJ_A], groups: [{ name: 'Alpha', projects: [PROJ_A] }] }, home);
+  assert.deepEqual(loadConfig(home).groups, [{ name: 'Alpha', projects: [path.resolve(PROJ_A)] }]);
+
+  saveConfig({ projects: [], groups: [{ name: 'Alpha', projects: [PROJ_A] }] }, home);
+  assert.deepEqual(loadConfig(home).groups, [{ name: 'Alpha', projects: [] }]);
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -609,6 +658,72 @@ test('AC 6: a project jobs scan tags the project and its jobs with the custom na
     const all = model.today.concat(model.notStarted, model.others);
     assert.ok(all.length >= 1);
     assert.ok(all.every((j) => j.projectName === 'Alpha Custom'));
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('groups: PUT /api/groups persists ids as paths and the dashboard answers with ids', async () => {
+  const home = tempHome();
+  const projEmpty = path.join(FIXTURES, 'proj-empty');
+  saveConfig({ projects: [PROJ_A, projEmpty] }, home);
+  const pidA = encodeProjectId(path.resolve(PROJ_A));
+  await withServer({ home }, async (get) => {
+    const put = await get('/api/groups', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groups: [{ name: 'Alpha', ids: [pidA, 'D--not-configured'] }, { name: 'mynrd', ids: [] }] }),
+    });
+    assert.equal(put.status, 200);
+    // The response is the whole dashboard, groups included, and the unknown id
+    // was dropped rather than refused.
+    const dashboard = await put.json();
+    assert.deepEqual(dashboard.groups, [{ name: 'Alpha', ids: [pidA] }, { name: 'mynrd', ids: [] }]);
+
+    // What landed in config.json is paths, so groups survive the id encoding changing.
+    assert.deepEqual(loadConfig(home).groups, [
+      { name: 'Alpha', projects: [path.resolve(PROJ_A)] },
+      { name: 'mynrd', projects: [] },
+    ]);
+
+    // Emptying the list deletes every group.
+    await get('/api/groups', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groups: [] }) });
+    assert.deepEqual((await (await get('/api/dashboard')).json()).groups, []);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('groups: PUT /api/groups refuses a missing array or a nameless group', async () => {
+  const home = tempHome();
+  saveConfig({ projects: [PROJ_A] }, home);
+  await withServer({ home }, async (get) => {
+    for (const body of [{}, { groups: 'nope' }, { groups: [{ ids: [] }] }, { groups: [{ name: '   ', ids: [] }] }]) {
+      const res = await get('/api/groups', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      assert.equal(res.status, 400, JSON.stringify(body));
+    }
+    assert.equal((await get('/api/groups')).status, 405);
+    assert.deepEqual(loadConfig(home).groups, []);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('groups: a Settings save (PUT /api/config) does not wipe them', async () => {
+  const home = tempHome();
+  saveConfig({ projects: [PROJ_A], groups: [{ name: 'Alpha', projects: [PROJ_A] }] }, home);
+  await withServer({ home }, async (get) => {
+    const put = await get('/api/config', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projects: [PROJ_A], usageIntervalMinutes: 7 }),
+    });
+    assert.equal(put.status, 200);
+    assert.deepEqual(loadConfig(home).groups, [{ name: 'Alpha', projects: [path.resolve(PROJ_A)] }]);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('groups: /api/groups sits behind the same session gate as every other /api route', async () => {
+  const home = tempHome();
+  await withServer({ home, otpSecret: generateSecret() }, async (get) => {
+    const res = await get('/api/groups', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groups: [] }) });
+    assert.equal(res.status, 401);
   });
   fs.rmSync(home, { recursive: true, force: true });
 });

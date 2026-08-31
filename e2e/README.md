@@ -53,8 +53,20 @@ Two things the server would otherwise shell out for are injected instead
   nothing is written into a project folder.**
 
 `openTerminal()` is *not* injectable, so **no spec ever clicks the Terminal
-button** - a click would open a real console window on the machine running the
-suite. `project.spec.mjs` asserts the button and its title, and stops there.
+button** on the Conversation tab (`#terminalBtn`) - a click would open a real
+console window on the machine running the suite. `project.spec.mjs` asserts
+the button and its title, and stops there.
+
+The project page's own **Terminal tab** is a different thing: real pwsh shells
+rendered in-page by xterm.js, owned by the shell-host daemon
+(`src/shell-host.mjs`), not `openTerminal()`. `terminal.spec.mjs` does click
+that - safely, because `support/start-server.mjs` overrides `HOME`/
+`USERPROFILE` for its own process before the daemon can be spawned, so the
+daemon (and every pwsh it owns) lives under the same throwaway home as
+everything else, discovered through `<home>/.work-hub/shell-host.json`
+instead of the real one. Teardown (`cleanTestEnv`) kills that daemon - tree
+and all - before the temp home is removed, so no pwsh process outlives the
+suite.
 
 ## Layout
 
@@ -73,6 +85,9 @@ tests/conversation.spec.mjs  transcript rendering, the composer, a stubbed run
 tests/settings.spec.mjs   folder list, composer defaults, and the config-write paths
 tests/auth.spec.mjs       the gated server: 401 -> code prompt -> replay
 tests/responsive.spec.mjs every breakpoint claim in src/client/styles/responsive.css
+tests/terminal.spec.mjs   the project page's Terminal tab: tabs, rename, replay after
+                          reload, replay + reattach after a server restart, Processes
+                          dialog kill / kill-all
 ```
 
 ## Things worth knowing before you add a spec

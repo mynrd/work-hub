@@ -7,8 +7,12 @@
 // and why every other argument is an allowlisted token. See README.md § Exposure.
 //
 // node: built-ins plus exactly one third-party runtime dependency, node-pty,
-// which backs the in-page terminal (src/lib/shell.mjs) - there is no pty in
-// Node's built-ins. Everything else stays dependency-free.
+// which backs the in-page terminal - there is no pty in Node's built-ins.
+// Everything else stays dependency-free. node-pty itself is not loaded here:
+// this process only talks to it through `shells` (lib/shell-client.mjs by
+// default), a client of the separate shell host daemon (src/shell-host.mjs)
+// that actually owns every pty, so a restart of this server never kills or
+// orphans an open terminal.
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -24,7 +28,7 @@ import { createRunRegistry } from './lib/claude-run.mjs';
 import { resolveJob } from './lib/resolve-job.mjs';
 import { listBranches, listCommits, commitFiles, fileAtCommit, workingStatus, workingFile } from './lib/git.mjs';
 import { openTerminal, openVerifyTerminal } from './lib/terminal.mjs';
-import { createShellRegistry } from './lib/shell.mjs';
+import { createShellHostClient } from './lib/shell-client.mjs';
 import { listProcesses, killProcess } from './lib/processes.mjs';
 import { renderMarkdown } from './lib/markdown.mjs';
 import { loadEnrollment, createSessionStore, enrollmentPath } from './lib/authstore.mjs';
@@ -382,7 +386,7 @@ export function createServer({
   home = undefined,
   runs = createRunRegistry(),
   openVerify = openVerifyTerminal,
-  shells = createShellRegistry(),
+  shells = createShellHostClient(),
   usage = createUsageCache(),
   sessions = createSessionStore(),
   idleMinutes = 10,
@@ -433,7 +437,15 @@ export function createServer({
     // moves to the front, it does not shuffle everything else.
     const sorted = [...projects.filter((p) => p.favorite), ...projects.filter((p) => !p.favorite)];
 
-    return { projects: sorted, configPath: configPath(...homeArgs), loadError: config.loadError ?? null };
+    // Groups as project ids: the page only ever handles ids, and a member whose
+    // folder left the config has already been dropped by normalizeConfig.
+    const idOf = new Map(projects.map((p) => [p.path.toLowerCase(), p.id]));
+    const groups = (config.groups ?? []).map((g) => ({
+      name: g.name,
+      ids: g.projects.map((p) => idOf.get(p.toLowerCase())).filter(Boolean),
+    }));
+
+    return { projects: sorted, groups, configPath: configPath(...homeArgs), loadError: config.loadError ?? null };
   }
 
   /** One project's jobs, scanned on demand. This is the expensive call. */
@@ -481,9 +493,10 @@ export function createServer({
     try {
       config = saveConfig({
         projects: accepted,
-        // Not editable here - Settings does not know about stars. A folder
-        // dropped from `projects` loses its star in normalizeConfig.
+        // Not editable here - Settings does not know about stars or groups. A
+        // folder dropped from `projects` loses both in normalizeConfig.
         favorites: config.favorites,
+        groups: config.groups,
         projectNames: body?.projectNames ?? config.projectNames,
         usageIntervalMinutes: body?.usageIntervalMinutes ?? config.usageIntervalMinutes,
         defaults: body?.defaults ?? config.defaults,
@@ -514,6 +527,46 @@ export function createServer({
     const kept = (config.favorites ?? []).filter((p) => p.toLowerCase() !== key);
     try {
       config = saveConfig({ ...config, favorites: body.favorite ? [...kept, projectPath] : kept }, ...homeArgs);
+    } catch (err) {
+      sendJson(res, 500, { error: `Cannot write ${configPath(...homeArgs)}: ${err.message}` });
+      return;
+    }
+    sendJson(res, 200, buildDashboard());
+  }
+
+  /**
+   * Replaces the whole dashboard group list in one write. Create, rename,
+   * delete, and drag all send the full `[{ name, ids }]` they want, so there is
+   * no per-action route to keep consistent. Ids resolve to configured paths
+   * here; anything that does not resolve is dropped rather than refused, since
+   * the worst it can mean is a project removed between paint and drop.
+   */
+  async function handleGroupsPut(req, res) {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (err) {
+      sendJson(res, err.tooLarge ? 413 : 400, { error: err.tooLarge ? err.message : `Invalid request body: ${err.message}` });
+      return;
+    }
+    if (!Array.isArray(body?.groups)) {
+      sendJson(res, 400, { error: '`groups` must be an array' });
+      return;
+    }
+    const groups = [];
+    for (const entry of body.groups) {
+      if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string' || !entry.name.trim()) {
+        sendJson(res, 400, { error: 'Each group needs a non-empty string `name`' });
+        return;
+      }
+      const ids = Array.isArray(entry.ids) ? entry.ids : [];
+      const members = ids
+        .map((id) => (typeof id === 'string' ? resolveProjectId(config, id) : null))
+        .filter(Boolean);
+      groups.push({ name: entry.name, projects: members });
+    }
+    try {
+      config = saveConfig({ ...config, groups }, ...homeArgs);
     } catch (err) {
       sendJson(res, 500, { error: `Cannot write ${configPath(...homeArgs)}: ${err.message}` });
       return;
@@ -651,19 +704,31 @@ export function createServer({
     sendJson(res, 200, opened.shell);
   }
 
+  async function handleShellKill(req, res, shellId) {
+    const killed = await shells.kill(shellId);
+    if (!killed.ok) { sendJson(res, killed.status, { error: killed.error }); return; }
+    sendEmpty(res, 204);
+  }
+
+  /** DELETE /api/shells with no id: closes every shell the host owns. */
+  async function handleShellKillAll(req, res) {
+    await shells.killAll();
+    sendJson(res, 200, { ok: true });
+  }
+
   /**
    * The output stream: newline-delimited JSON events over a response that
    * never ends until the shell exits or the client goes away. The page reads
    * it with a streaming fetch (EventSource cannot carry the session header).
    */
-  function handleShellStream(req, res, shellId) {
+  async function handleShellStream(req, res, shellId) {
     let ended = false;
     const send = (event) => {
       if (ended) return; // a straggling event after exit must not write to an ended response
       res.write(JSON.stringify(event) + '\n');
       if (event.type === 'exit') { ended = true; res.end(); }
     };
-    const attached = shells.attach(shellId, send);
+    const attached = await shells.attach(shellId, send);
     if (!attached.ok) { sendJson(res, attached.status, { error: attached.error }); return; }
 
     res.writeHead(200, {
@@ -671,7 +736,10 @@ export function createServer({
       'Cache-Control': 'no-cache',
     });
     if (attached.replay) res.write(JSON.stringify({ type: 'data', data: attached.replay }) + '\n');
-    if (!attached.running) { send({ type: 'exit', exitCode: shells.status(shellId)?.exitCode ?? null }); return; }
+    // Already exited: the shell host (or an in-process fake) still delivers
+    // exactly one exit event through `send` above - it is never up to this
+    // handler to synthesize one.
+    if (!attached.running) return;
 
     // Keeps intermediaries (and the client's reader) from mistaking a quiet
     // shell for a dead connection.
@@ -688,7 +756,7 @@ export function createServer({
       sendJson(res, err.tooLarge ? 413 : 400, { error: err.tooLarge ? err.message : `Invalid request body: ${err.message}` });
       return;
     }
-    const wrote = shells.write(shellId, body?.data);
+    const wrote = await shells.write(shellId, body?.data);
     if (!wrote.ok) { sendJson(res, wrote.status, { error: wrote.error }); return; }
     sendEmpty(res, 204);
   }
@@ -701,8 +769,21 @@ export function createServer({
       sendJson(res, err.tooLarge ? 413 : 400, { error: err.tooLarge ? err.message : `Invalid request body: ${err.message}` });
       return;
     }
-    const resized = shells.resize(shellId, body?.cols, body?.rows);
+    const resized = await shells.resize(shellId, body?.cols, body?.rows);
     if (!resized.ok) { sendJson(res, resized.status, { error: resized.error }); return; }
+    sendEmpty(res, 204);
+  }
+
+  async function handleShellRename(req, res, shellId) {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (err) {
+      sendJson(res, err.tooLarge ? 413 : 400, { error: err.tooLarge ? err.message : `Invalid request body: ${err.message}` });
+      return;
+    }
+    const renamed = await shells.rename(shellId, body?.name);
+    if (!renamed.ok) { sendJson(res, renamed.status, { error: renamed.error }); return; }
     sendEmpty(res, 204);
   }
 
@@ -853,6 +934,12 @@ export function createServer({
       return;
     }
 
+    if (pathname === '/api/groups') {
+      if (req.method === 'PUT') { handleGroupsPut(req, res); return; }
+      sendJson(res, 405, { error: 'Only PUT is supported here' });
+      return;
+    }
+
     if (pathname === '/api/usage' && req.method === 'GET') {
       sendJson(res, 200, { ...usage.get(), intervalMinutes: config.usageIntervalMinutes });
       return;
@@ -873,39 +960,43 @@ export function createServer({
 
     // /api/shells - the Processes list: every Work Hub shell across all
     // projects, this session's and any straggler the OS still shows (see
-    // lib/processes.mjs). One place, whatever page you are on.
-    if (pathname === '/api/shells' && req.method === 'GET') {
-      const nameOf = (projectId) => {
-        const p = projectId ? resolveProjectId(config, projectId) : null;
-        return p ? (config.projectNames[p] || path.basename(p) || p) : undefined;
-      };
-      listProcesses({ registry: shells, nameOf })
-        .then((list) => sendJson(res, 200, { processes: list }))
-        .catch((err) => sendJson(res, 500, { error: `Could not list processes: ${err.message}` }));
+    // lib/processes.mjs). One place, whatever page you are on. DELETE (no id)
+    // is the "close everything" button - it kills every shell the host owns,
+    // which is why it is checked here, ahead of the `/api/shells/:shellId`
+    // parsing below that always expects a UUID segment.
+    if (pathname === '/api/shells') {
+      if (req.method === 'GET') {
+        const nameOf = (projectId) => {
+          const p = projectId ? resolveProjectId(config, projectId) : null;
+          return p ? (config.projectNames[p] || path.basename(p) || p) : undefined;
+        };
+        listProcesses({ registry: shells, nameOf })
+          .then((list) => sendJson(res, 200, { processes: list }))
+          .catch((err) => sendJson(res, 500, { error: `Could not list processes: ${err.message}` }));
+        return;
+      }
+      if (req.method === 'DELETE') { handleShellKillAll(req, res); return; }
+      sendJson(res, 405, { error: 'Only GET and DELETE are supported here' });
       return;
     }
 
     // /api/shells/:shellId[/...] - per-shell operations, keyed by the id the
-    // page already holds. stream/input/resize drive one terminal; DELETE kills
-    // a session shell cleanly by closing its pty.
+    // page already holds. stream/input/resize drive one terminal; rename sets
+    // its tab label; DELETE kills a session shell cleanly by closing its pty.
     if (pathname.startsWith('/api/shells/')) {
       const rest = pathname.slice('/api/shells/'.length).split('/');
       const shellId = decodeSegment(rest[0]);
       if (!shellId || !UUID_RE.test(shellId)) { sendJson(res, 400, { error: 'Malformed shell id' }); return; }
 
       if (rest.length === 1) {
-        if (req.method === 'DELETE') {
-          const killed = shells.kill(shellId);
-          if (!killed.ok) { sendJson(res, killed.status, { error: killed.error }); return; }
-          sendEmpty(res, 204);
-          return;
-        }
+        if (req.method === 'DELETE') { handleShellKill(req, res, shellId); return; }
         sendJson(res, 405, { error: 'Only DELETE is supported here' });
         return;
       }
       if (rest[1] === 'stream' && rest.length === 2 && req.method === 'GET') { handleShellStream(req, res, shellId); return; }
       if (rest[1] === 'input' && rest.length === 2 && req.method === 'POST') { handleShellInput(req, res, shellId); return; }
       if (rest[1] === 'resize' && rest.length === 2 && req.method === 'POST') { handleShellResize(req, res, shellId); return; }
+      if (rest[1] === 'rename' && rest.length === 2 && req.method === 'POST') { handleShellRename(req, res, shellId); return; }
       sendJson(res, 404, { error: 'Not found' });
       return;
     }
@@ -955,7 +1046,10 @@ export function createServer({
       // because a shellId is unique on its own and the page holds it directly.
       if (parts[1] === 'shells' && parts.length === 2) {
         if (req.method === 'POST') { handleShellOpen(req, res, pid, projectPath); return; }
-        if (req.method === 'GET') { sendJson(res, 200, { shells: shells.listForProject(pid) }); return; }
+        if (req.method === 'GET') {
+          shells.listForProject(pid).then((list) => sendJson(res, 200, { shells: list }));
+          return;
+        }
         sendJson(res, 405, { error: 'Only GET and POST are supported here' });
         return;
       }
@@ -1103,7 +1197,11 @@ export function createServer({
     sendJson(res, 404, { error: 'Not found' });
   });
 
-  server.on('close', () => { usage.stop(); shells.killAll(); });
+  // Deliberately does NOT call shells.killAll() here any more: the shell host
+  // daemon owns every pty in its own process now (see lib/shell-client.mjs),
+  // so a server restart or shutdown must leave every open terminal running -
+  // that survival is the entire point of moving shells out of this process.
+  server.on('close', () => { usage.stop(); });
   return server;
 }
 

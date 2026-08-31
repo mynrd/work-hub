@@ -51,9 +51,11 @@
     The pull is `--ff-only`, so it never merges; a diverged local `main` is
     reported and the running server is left alone. Pass -NoWatch to disable.
 
-    If node exits on its own - a crash, or bad code on main - this script exits
-    with node's code. It is a restarter, not a crash supervisor, so a broken
-    commit does not turn into a restart loop.
+    If node exits on its own - a crash, or bad code on main - this script
+    restarts it, up to 3 attempts. A restart that stays up for 60 seconds
+    resets the attempt counter; 3 failures in a row (each dying within 60s)
+    make the script give up and exit with node's code, so a broken commit
+    does not turn into an endless restart loop.
 
 .PARAMETER Port
     TCP port to listen on. Default 5081 (same default as serve.mjs). Whatever is
@@ -436,11 +438,16 @@ if (-not $watch) {
     exit $LASTEXITCODE
 }
 
-Write-Host "Watching origin/main every ${WatchInterval}s; restarts on a new commit when main is clean." -ForegroundColor DarkGray
+$restartAttempts = 0
+$maxRestartAttempts = 3
+$stableAfterSeconds = 60
+
+Write-Host "Watching origin/main every ${WatchInterval}s; restarts on a new commit when main is clean, and on a crash (up to $maxRestartAttempts quick failures in a row)." -ForegroundColor DarkGray
 Write-Host 'Press Ctrl+C to stop.' -ForegroundColor DarkGray
 Write-Host ''
 
 $proc = Start-Server
+$startedAt = Get-Date
 $fetchFailing = $false
 
 try {
@@ -449,9 +456,23 @@ try {
         # Ctrl+C reaches node too, so this returns promptly instead of sitting out
         # the full interval.
         if ($proc.WaitForExit($WatchInterval * 1000)) {
+            $exitCode = $proc.ExitCode
+            # A run that survived a while was a real deployment, not a failed
+            # start - give the next crash a fresh set of attempts.
+            if (((Get-Date) - $startedAt).TotalSeconds -ge $stableAfterSeconds) {
+                $restartAttempts = 0
+            }
+            $restartAttempts++
+            if ($restartAttempts -gt $maxRestartAttempts) {
+                Write-Host ''
+                Write-Host "Server exited with code $exitCode and died within ${stableAfterSeconds}s on $maxRestartAttempts restarts in a row; giving up." -ForegroundColor Yellow
+                exit $exitCode
+            }
             Write-Host ''
-            Write-Host "Server exited with code $($proc.ExitCode); not restarting (only a new commit triggers a restart)." -ForegroundColor Yellow
-            exit $proc.ExitCode
+            Write-Host "Server exited with code $exitCode; restarting (attempt $restartAttempts of $maxRestartAttempts)." -ForegroundColor Yellow
+            $proc = Start-Server
+            $startedAt = Get-Date
+            continue
         }
 
         $code = 0
@@ -495,6 +516,7 @@ try {
         Write-Host 'Restarting the server on the new commit.' -ForegroundColor Cyan
         Stop-ServerTree -Process $proc
         $proc = Start-Server
+        $startedAt = Get-Date
         Write-Host ''
     }
 } finally {

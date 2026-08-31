@@ -49,6 +49,41 @@
 .proj__name { font-weight: 650; font-size: var(--fs-md); display: flex; align-items: center; gap: var(--s-2); padding-right: var(--s-6); }
 .proj__path { font-family: var(--font-mono); font-size: 11px; color: var(--fg-subtle); overflow-wrap: anywhere; }
 .proj__stats { display: flex; gap: var(--s-3); font-size: var(--fs-xs); color: var(--fg-muted); flex-wrap: wrap; }
+
+/* ---------- Project groups ---------- */
+.card__head-actions { display: flex; align-items: center; gap: var(--s-3); }
+.pgroup + .pgroup { margin-top: var(--s-5); }
+.pgroup__head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-3); padding-bottom: var(--s-2); border-bottom: 1px solid var(--border); }
+.pgroup__name { font-size: var(--fs-sm); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted); }
+.pgroup__actions { margin-left: auto; display: flex; gap: var(--s-1); }
+.pgroup__btn {
+  width: 26px; height: 26px; border-radius: var(--r-sm); border: 1px solid transparent;
+  background: transparent; color: var(--fg-subtle); display: grid; place-items: center;
+}
+.pgroup__btn:hover { background: var(--surface-3); color: var(--fg); }
+.pgroup__empty { border: 1px dashed var(--border-strong); border-radius: var(--r-lg); padding: var(--s-4); font-size: var(--fs-sm); color: var(--fg-subtle); text-align: center; }
+.pgroup.is-dropover { outline: 2px dashed var(--accent-400); outline-offset: 4px; border-radius: var(--r-sm); }
+.proj-cell.is-dragging { opacity: .5; }
+/* The move button sits to the left of the star; the name clears both. */
+.proj-cell[draggable] .proj__name { padding-right: 64px; }
+.proj__move {
+  position: absolute; top: 6px; right: 38px; width: 30px; height: 30px; border-radius: var(--r-sm);
+  border: 1px solid transparent; background: transparent; color: var(--fg-subtle);
+  display: grid; place-items: center; transition: background var(--t-fast), color var(--t-fast);
+}
+.proj__move:hover { background: var(--surface-3); color: var(--fg); }
+.proj__menu {
+  position: absolute; top: 38px; right: 6px; z-index: 5; min-width: 140px;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  box-shadow: var(--shadow-md); padding: var(--s-1); display: flex; flex-direction: column;
+}
+.proj__menu button { text-align: left; border: 0; background: transparent; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-sm); }
+.proj__menu button:hover { background: var(--surface-3); }
+.proj__menu-none { padding: var(--s-2) var(--s-3); font-size: var(--fs-xs); color: var(--fg-subtle); }
+.grpform { display: inline-flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.grpform .input { height: 32px; width: 200px; }
+.grpform__error { font-size: var(--fs-xs); color: var(--danger-fg); flex-basis: 100%; }
+.grpform-row { margin-bottom: var(--s-4); }
 .spinner {
   width: 14px; height: 14px; flex: none; border-radius: 99px;
   border: 2px solid var(--border); border-top-color: var(--accent-400);
@@ -75,6 +110,12 @@
 .term-tab.is-active .term-tab__close { color: #9aa0b4; }
 .term-tab__close:hover { color: var(--danger-fg); background: color-mix(in srgb, var(--danger) 18%, transparent); }
 .term-tab--new { font-size: var(--fs-md); padding: 4px 12px; color: var(--fg-muted); }
+/* A tab whose shell has exited: dimmer than a live tab so the strip reads at a
+   glance. The close button keeps its own color (set above), so it stays
+   legible and clickable even here. */
+.term-tab--dead { color: var(--fg-subtle); }
+.term-tab--dead:hover { color: var(--fg-muted); background: var(--surface-3); }
+.term-tab--dead.is-active { color: var(--fg-muted); }
 /* Inline rename box, shown while a tab label is being edited. */
 .term-tab__rename { width: 96px; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg); background: var(--surface); border: 1px solid var(--accent-400); border-radius: var(--r-sm); padding: 1px 4px; outline: none; }
 
@@ -89,6 +130,11 @@
 .proc-row__main { flex: 1 1 auto; min-width: 0; }
 .proc-row__title { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); flex-wrap: wrap; }
 .proc-row__meta { font-size: var(--fs-xs); color: var(--fg-muted); margin-top: 2px; overflow-wrap: anywhere; }
+/* The project name is a link to that project's Terminal tab: same restraint as
+   .title-edit - it reads as text until you hover or tab to it. */
+.proc-row__proj { color: inherit; text-decoration: none; border-radius: var(--r-sm); }
+.proc-row__proj:hover, .proc-row__proj:focus-visible { color: var(--accent-600); text-decoration: underline; }
+[data-theme="dark"] .proc-row__proj:hover, [data-theme="dark"] .proc-row__proj:focus-visible { color: var(--accent-400); }
 .proc-row__kill { flex: none; }
 .pager { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-3) var(--s-4); border-top: 1px solid var(--border); }
 .pager__info { font-size: var(--fs-xs); color: var(--fg-muted); margin-right: auto; font-family: var(--font-mono); }

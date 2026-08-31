@@ -12,15 +12,25 @@
 
 import { api } from '../api.mjs';
 import { esc, relativeTime } from '../dom.mjs';
+import { state } from '../state.mjs';
+import { renderCurrentPage } from '../render.mjs';
 
-var overlay, body, refreshBtn, refreshLabel;
+var overlay, body, refreshBtn, refreshLabel, killAllBtn, killAllLabel;
 var busy = false;
 
 function rowHtml(p) {
-  var who = p.projectName ? esc(p.projectName) : (p.projectId ? esc(p.projectId) : 'unknown project');
+  var name = p.projectName ? esc(p.projectName) : (p.projectId ? esc(p.projectId) : 'unknown project');
+  // A row that knows its project is a real link to that project's Terminal
+  // tab; a straggler with no marker (projectId null) stays plain text.
+  var who = p.projectId
+    ? '<a class="proc-row__proj" href="#/p/' + encodeURIComponent(p.projectId) + '" data-proj="' + esc(p.projectId) +
+      '" title="Open this project’s Terminal tab">' + name + '</a>'
+    : name;
   var kind = p.source === 'external'
     ? '<span class="badge badge-warning mono">straggler</span>'
-    : '<span class="badge badge-info mono">this session</span>';
+    : (p.running === false
+      ? '<span class="badge badge-neutral mono">exited</span>'
+      : '<span class="badge badge-info mono">this session</span>');
   var pidText = p.pid ? 'pid ' + p.pid : 'no pid';
   var when = p.startedAt ? relativeTime(p.startedAt) : '';
   var killAttr = p.source === 'external'
@@ -65,6 +75,8 @@ export function initProcessesDialog() {
   body = document.getElementById('processesBody');
   refreshBtn = document.getElementById('processesRefreshBtn');
   refreshLabel = document.getElementById('processesRefreshLabel');
+  killAllBtn = document.getElementById('processesKillAllBtn');
+  killAllLabel = document.getElementById('processesKillAllLabel');
   var openBtn = document.getElementById('processesBtn');
   var closeBtn = document.getElementById('processesCloseBtn');
   if (!overlay || !openBtn) return;
@@ -72,10 +84,41 @@ export function initProcessesDialog() {
   openBtn.addEventListener('click', open);
   closeBtn.addEventListener('click', close);
   refreshBtn.addEventListener('click', load);
+  if (killAllBtn) killAllBtn.addEventListener('click', function () {
+    if (busy) return;
+    killAllBtn.disabled = true;
+    if (killAllLabel) killAllLabel.textContent = 'Killing…';
+    api('/api/shells', { method: 'DELETE' })
+      .then(load, function (err) {
+        // Same idea as the per-row failure: the list stays as it is, the error
+        // just shows above it rather than wiping what already rendered.
+        var banner = document.createElement('p');
+        banner.className = 'term-status is-error';
+        banner.textContent = err.message;
+        body.insertBefore(banner, body.firstChild);
+      })
+      .then(function () {
+        killAllBtn.disabled = false;
+        if (killAllLabel) killAllLabel.textContent = 'Kill all';
+      });
+  });
   overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
   overlay.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
 
   body.addEventListener('click', function (e) {
+    // The project name: preselect the Terminal tab the same way the tab strip
+    // does (state.projectTab, which the 30s repaint respects), then let the
+    // anchor's own href do the navigation. Already on that page - a same-value
+    // hash fires no hashchange - so repaint by hand instead.
+    var link = e.target.closest('[data-proj]');
+    if (link) {
+      var projId = link.getAttribute('data-proj');
+      state.projectTab[projId] = 'terminal';
+      close();
+      if (location.hash === '#/p/' + encodeURIComponent(projId)) { e.preventDefault(); renderCurrentPage(); }
+      return;
+    }
+
     var btn = e.target.closest('[data-kill-shell],[data-kill-pid]');
     if (!btn) return;
     btn.disabled = true;

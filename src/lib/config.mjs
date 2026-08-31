@@ -31,6 +31,7 @@ const DEFAULTS = {
   projects: [],
   favorites: [],
   projectNames: {},
+  groups: [],
   usageIntervalMinutes: 5,
   defaults: { model: 'opus', effort: 'high', permissionMode: 'default' },
 };
@@ -101,6 +102,37 @@ function normalizeProjectNames(value, projects) {
   return out;
 }
 
+/** Dashboard groups: `[{ name, projects: [path] }]`, in display order. A group
+ *  survives being empty - a freshly created one has nothing in it yet. A member
+ *  path that is not a monitored folder is dropped, a path claimed by an earlier
+ *  group stays there, and a second group with the same name (case-insensitive)
+ *  is dropped so a drop target is never ambiguous. */
+function normalizeGroups(value, projects) {
+  if (!Array.isArray(value)) return [];
+  const known = new Map(projects.map((p) => [p.toLowerCase(), p]));
+  const seenNames = new Set();
+  const claimed = new Set();
+  const out = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    if (typeof entry.name !== 'string') continue;
+    const name = entry.name.trim();
+    if (!name || seenNames.has(name.toLowerCase())) continue;
+    seenNames.add(name.toLowerCase());
+    const members = [];
+    for (const raw of Array.isArray(entry.projects) ? entry.projects : []) {
+      if (typeof raw !== 'string' || !raw.trim()) continue;
+      const key = path.resolve(raw.trim()).toLowerCase();
+      const hit = known.get(key);
+      if (!hit || claimed.has(key)) continue;
+      claimed.add(key);
+      members.push(hit);
+    }
+    out.push({ name, projects: members });
+  }
+  return out;
+}
+
 function normalizeDefaults(value) {
   const src = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   return {
@@ -126,6 +158,7 @@ export function normalizeConfig(raw) {
     projects,
     favorites: normalizeFavorites(src.favorites, projects),
     projectNames: normalizeProjectNames(src.projectNames, projects),
+    groups: normalizeGroups(src.groups, projects),
     usageIntervalMinutes: normalizeInterval(src.usageIntervalMinutes),
     defaults: normalizeDefaults(src.defaults),
   };

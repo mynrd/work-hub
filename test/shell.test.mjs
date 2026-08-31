@@ -66,6 +66,46 @@ test('open creates a new shell each time, keyed by shellId, and tags the marker'
   assert.ok(spawned[0].args.join(' ').includes('p1|shell-1'));
 });
 
+test('a new shell has no name until renamed', async () => {
+  const { registry } = registryWithFake();
+  const opened = await registry.open({ projectId: 'p1', cwd: 'x' });
+  assert.equal(opened.shell.name, null);
+  assert.equal(registry.status('shell-1').name, null);
+});
+
+test('rename trims, caps at 60 chars, and clears on blank input', async () => {
+  const { registry } = registryWithFake();
+  await registry.open({ projectId: 'p1', cwd: 'x' });
+
+  assert.equal(registry.rename('shell-1', '  build  ').ok, true);
+  assert.equal(registry.status('shell-1').name, 'build');
+
+  const long = 'x'.repeat(90);
+  registry.rename('shell-1', long);
+  assert.equal(registry.status('shell-1').name, long.slice(0, 60));
+  assert.equal(registry.status('shell-1').name.length, 60);
+
+  registry.rename('shell-1', '   ');
+  assert.equal(registry.status('shell-1').name, null);
+
+  registry.rename('shell-1', 'again');
+  registry.rename('shell-1', '');
+  assert.equal(registry.status('shell-1').name, null);
+});
+
+test('rename works on an already-exited shell, and 404s on an unknown one', async () => {
+  const { registry, spawned } = registryWithFake();
+  await registry.open({ projectId: 'p1', cwd: 'x' });
+  spawned[0].pty.exit(0);
+
+  assert.equal(registry.rename('shell-1', 'done').ok, true);
+  assert.equal(registry.status('shell-1').name, 'done');
+
+  const missing = registry.rename('nope', 'x');
+  assert.equal(missing.ok, false);
+  assert.equal(missing.status, 404);
+});
+
 test('open clamps nonsense dimensions to the defaults', async () => {
   const { registry } = registryWithFake();
   const opened = await registry.open({ projectId: 'p1', cwd: 'x', cols: 'wide', rows: 99999 });

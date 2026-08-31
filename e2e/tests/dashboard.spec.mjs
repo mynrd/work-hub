@@ -92,6 +92,60 @@ test.describe('favourites', () => {
   });
 });
 
+test.describe('groups', () => {
+  test.beforeEach(({ }, testInfo) => {
+    test.skip(testInfo.project.name !== 'desktop', 'config writes run once, on desktop only');
+  });
+
+  test('create a group, move a project in, drag it out, rename, delete', async ({ page }) => {
+    const card = cardTitled(page, 'Projects');
+    const section = (name) => card.locator('.pgroup', { has: page.locator('.pgroup__name', { hasText: name }) });
+
+    try {
+      // Create: the inline form in the card head, submitted with Enter.
+      await card.locator('#newGroupBtn').click();
+      await card.locator('#groupNameInput').fill('Alpha');
+      await card.locator('#groupNameInput').press('Enter');
+      await expect(section('Alpha')).toContainText('Drag a project here.');
+      await expect(section('Ungrouped')).toBeVisible();
+
+      // Move proj-a in through the per-card menu (the touch path).
+      const cellA = card.locator('.proj-cell', { hasText: 'proj-a' });
+      await cellA.locator('.proj__move').click();
+      await cellA.locator('.proj__menu button', { hasText: 'Alpha' }).click();
+      await expect(section('Alpha').locator('.proj__name')).toHaveText('proj-a');
+
+      // The grouping is in ~/.work-hub/config.json, not this browser, so a
+      // reload that re-fetches /api/dashboard still shows it.
+      await page.reload();
+      await expect(section('Alpha').locator('.proj__name')).toHaveText('proj-a');
+
+      // Drag it back out to Ungrouped.
+      await section('Alpha').locator('.proj-cell', { hasText: 'proj-a' }).dragTo(section('Ungrouped'));
+      await expect(section('Alpha')).toContainText('Drag a project here.');
+      await expect(section('Ungrouped').locator('.proj-cell', { hasText: 'proj-a' })).toBeVisible();
+
+      // Rename.
+      await section('Alpha').locator('[data-grp-rename]').click();
+      await card.locator('#groupNameInput').fill('mynrd');
+      await card.locator('#groupNameInput').press('Enter');
+      await expect(section('mynrd')).toBeVisible();
+
+      // Delete: no groups left, so the plain ungrouped strip is back.
+      await section('mynrd').locator('[data-grp-delete]').click();
+      await expect(card.locator('.pgroup')).toHaveCount(0);
+      await expect(card.locator('.proj-cell', { hasText: 'proj-a' })).toBeVisible();
+    } finally {
+      // Whatever the test left behind, the next spec starts groupless.
+      await page.evaluate(() => fetch('/api/groups', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groups: [] }),
+      }));
+    }
+  });
+});
+
 test('search filters the project strip and the count badge follows it', async ({ page }) => {
   const projects = cardTitled(page, 'Projects');
   const before = await projects.locator('.proj').count();

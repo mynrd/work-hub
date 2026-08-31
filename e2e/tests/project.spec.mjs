@@ -8,9 +8,9 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator('.page-head h1')).toHaveText('proj-a');
 });
 
-test('the page shows three tabs with Work Items active by default', async ({ page }) => {
+test('the page shows four tabs with Work Items active by default', async ({ page }) => {
   const tabs = projectTabs(page);
-  await expect(page.locator('#projectTabs .tab')).toHaveText(['Work Items', 'Conversation', 'Branch and Commits']);
+  await expect(page.locator('#projectTabs .tab')).toHaveText(['Work Items', 'Conversation', 'Branch and Commits', 'Terminal']);
   await expect(tabs.tab('work')).toHaveAttribute('aria-selected', 'true');
   await expect(tabs.tab('conversation')).toHaveAttribute('aria-selected', 'false');
   await expect(tabs.tab('git')).toHaveAttribute('aria-selected', 'false');
