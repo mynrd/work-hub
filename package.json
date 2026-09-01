@@ -2,6 +2,7 @@
   "name": "work-hub",
   "version": "1.0.0",
   "description": "A local web dashboard over several project folders at once, plus a console for the Claude Code conversations that happened in them.",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {
