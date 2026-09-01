@@ -433,9 +433,11 @@ export function createServer({
       };
     });
 
-    // Favourites first, config order kept inside each group - a starred folder
-    // moves to the front, it does not shuffle everything else.
-    const sorted = [...projects.filter((p) => p.favorite), ...projects.filter((p) => !p.favorite)];
+    // Favourites first, then by name - the order every dashboard section reuses,
+    // so each group lists its starred folders first and the rest alphabetically.
+    const byName = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+    const sorted = [...projects].sort((a, b) =>
+      (a.favorite === b.favorite ? 0 : a.favorite ? -1 : 1) || byName.compare(a.name, b.name));
 
     // Groups as project ids: the page only ever handles ids, and a member whose
     // folder left the config has already been dropped by normalizeConfig.
