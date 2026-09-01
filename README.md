@@ -13,6 +13,8 @@ It also shows your real subscription usage, straight from `claude -p /usage`.
 
 Node built-ins plus exactly one runtime dependency: `node-pty`, which backs the Terminal tab (there is no pty in Node's built-ins). Without `npm install` everything else still works; the Terminal tab answers 501. xterm.js is vendored into `src/client/vendor/`, so the client stays static.
 
+**Contents:** [Run it](#run-it) · [Requirements](#requirements) · [Exposure](#-exposure) · [Configuration](#configuration) · [How the pieces map](#how-the-pieces-map) · [Routes](#routes) · [Tests](#tests) · [Not in here](#not-in-here) · [License](#license)
+
 ---
 
 ## Run it
@@ -358,6 +360,12 @@ imports from it - the app still runs on node built-ins alone.
 - Editing `PLAN.md`, or anything under a monitored folder other than the workflow block that **Resolve** rewrites.
 - Multi-user, accounts, roles, HTTPS. One pairing, one person.
 
+## License
+
+[MIT](LICENSE).
+
+xterm.js and its fit addon are vendored under `src/client/vendor/` and carry their own MIT license headers.
+
 ## Credits
 
-Grown out of two local tools: a private work-viewer dashboard (the architecture, the design language and `markdown.mjs`), and [claude-usage](https://github.com/mynrd/claude-usage) (transcript parsing and the `/usage` fetch).
+Grown out of two earlier local tools: a private work-viewer dashboard (the architecture, the design language and `markdown.mjs`), and [claude-usage](https://github.com/mynrd/claude-usage) (transcript parsing and the `/usage` fetch).
