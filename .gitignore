@@ -2,6 +2,7 @@
 node_modules/
 
 # Playwright output. The suite itself is tracked; what it produces is not.
+test-results/
 e2e/test-results/
 e2e/playwright-report/
 e2e/blob-report/
