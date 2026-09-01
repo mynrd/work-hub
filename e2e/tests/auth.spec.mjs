@@ -103,6 +103,7 @@ test('a wrong code is refused with a reason, and hands out nothing', async ({ pa
 
 test('fewer than six digits is refused before anything is sent', async ({ page }) => {
   const o = otp(page);
+  await ensureOtpMode(page); // the desktop PIN test may have flipped the prompt to PIN mode
   const posts = [];
   page.on('request', (r) => { if (r.url().includes('/api/auth/otp')) posts.push(r.url()); });
   await o.input.fill('123');
