@@ -38,7 +38,7 @@
 
   /* Below 16px iOS Safari zooms the page when a field takes focus, and there
      is no way back out to the original scale. Every focusable field opts up. */
-  .input, .select, .search input, .composer textarea { font-size: 16px; }
+  .input, .select, .search input, .chat-find input, .sess-find input, .composer textarea { font-size: 16px; }
 
   /* A Windows path, a folder id and a session id are all single unbreakable
      tokens. On a phone there is no column left to scroll them in, so anything
@@ -127,6 +127,14 @@
   /* Git compare view: Before/After side by side has no room on a phone, so it
      becomes Before then After, each full width. */
   .compare { grid-template-columns: minmax(0, 1fr); }
+
+  /* The topbar wraps to two rows here, so a strip stuck under a one-row topbar
+     would hide behind it. It scrolls with the transcript instead; the pager
+     under the messages is the one that stays in reach. */
+  .convtools { position: static; top: auto; }
+  /* Stacked, each token cell is a label and a value on its own line and the
+     agent names need to wrap. */
+  .tok__body .table tbody td { white-space: normal; }
 }
 
 /* ---------- 560px: small phone ---------- */
@@ -155,6 +163,7 @@
 
   .strip { grid-template-columns: minmax(0, 1fr); }
   .sess__row { padding: var(--s-3); }
+  .sess-find { padding: var(--s-3); }
   .pager { flex-wrap: wrap; }
 }
 

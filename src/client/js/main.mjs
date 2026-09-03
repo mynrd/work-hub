@@ -7,6 +7,7 @@ import { loadChat, loadConfig, loadDashboard, loadJobs, loadSessions, loadUsage 
 import { initTheme } from './theme.mjs';
 import { initRouter } from './router.mjs';
 import { initProcessesDialog } from './components/processes-dialog.mjs';
+import { initScrollJump } from './components/scroll-jump.mjs';
 
 import './views/dashboard.mjs';
 import './views/settings.mjs';
@@ -15,6 +16,7 @@ import './views/conversation.mjs';
 
 initTheme();
 initProcessesDialog();
+initScrollJump();
 
 // ---- Topbar -----------------------------------------------------------------
 

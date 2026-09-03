@@ -4,7 +4,7 @@ import { esc, errorCard, loadingCard } from '../dom.mjs';
 import { state, timers } from '../state.mjs';
 import { loadConfig, loadDashboard, loadJobs, loadSessions, projectOf, saveConfig } from '../data.mjs';
 import { registerView, renderCurrentPage, setApp } from '../render.mjs';
-import { jobTable, unreadableTable, wireJobRows } from '../components/job-table.mjs';
+import { jobTable, unreadableTable, wireJobRows, wireJobFind } from '../components/job-table.mjs';
 import { sessionsCardHtml, wireSessionPager, wireNewConversation, wireTerminal } from '../components/sessions-card.mjs';
 import { gitPaneHtml, wireGitPane, enterGitPane, refreshGitPane } from '../components/git-card.mjs';
 import { terminalPaneHtml, wireTerminalPane, terminalPaneIsLive } from '../components/terminal-pane.mjs';
@@ -56,7 +56,7 @@ function renderProject() {
     paneHtml = jobs
       ? jobTable('Worked today', 'A file under the job folder changed today.', jobs.today, 'info', false, 'Nothing has been touched today.') +
         jobTable('Not yet started', 'Build is still pending and no run has been recorded.', jobs.notStarted, 'accent', false, 'Every job has been started.') +
-        jobTable('Others', 'Everything else.', jobs.others, 'neutral', false, 'Nothing here.') +
+        jobTable('Others', 'Everything else.', jobs.others, 'neutral', false, 'Nothing here.', { find: { id: 'jobFind', value: state.jobFind[pid] || '' } }) +
         unreadableTable(jobs.unreadable, false)
       : loadingCard('Jobs', 'Scanning .work/ in this folder.');
   }
@@ -90,7 +90,7 @@ function renderProject() {
       '</div>' +
     '</div>'
   );
-  if (tab === 'work') wireJobRows();
+  if (tab === 'work') { wireJobRows(); wireJobFind(pid); }
   if (tab === 'conversation') { wireNewConversation(pid); wireTerminal(pid); wireSessionPager(pid); }
   if (tab === 'git') wireGitPane(pid);
   if (tab === 'terminal') wireTerminalPane(pid);

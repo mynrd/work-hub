@@ -49,21 +49,25 @@ export function resolveTranscriptDir(projectPath, home = os.homedir()) {
   return null;
 }
 
-/** Number of subagent transcripts for a session (`<sessionId>/subagents/**.jsonl`).
- *  v1 shows the count only; the transcripts themselves are not rendered. */
-function countSubagents(dir, sessionId) {
+/** Every subagent transcript of a session (`<sessionId>/subagents/**.jsonl`),
+ *  sorted. Plain Task subagents sit flat as `agent-<id>.jsonl`; workflow
+ *  researchers nest one level deeper under `workflows/<id>/`, so the walk is
+ *  recursive. Sorted because cross-file dedupe attributes a shared turn to the
+ *  first file that carries it - an unstable order would move tokens between
+ *  agent rows run to run. */
+function listAgentTranscripts(dir, sessionId) {
   const base = path.join(dir, sessionId, 'subagents');
-  let n = 0;
+  const out = [];
   const walk = (d) => {
     let entries;
     try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
       if (e.isDirectory()) walk(path.join(d, e.name));
-      else if (e.name.endsWith('.jsonl')) n++;
+      else if (e.name.endsWith('.jsonl')) out.push(path.join(d, e.name));
     }
   };
   walk(base);
-  return n;
+  return out.sort();
 }
 
 /** First line of a user message, trimmed of the CLI's injected markup, capped at
@@ -93,14 +97,88 @@ function firstTextOf(content) {
   return '';
 }
 
+// ── Token usage ──────────────────────────────────────────────────────────────
+// Ported from claude-usage/src/services/projects.js (createUsageDeduper:31,
+// getSessionSubagents:774) with every cost, price and savings field dropped -
+// this dashboard reports tokens only.
+
+const USAGE_KEYS = ['input', 'output', 'cacheCreate', 'cacheRead'];
+
+const emptyUsage = () => ({ input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 });
+
+/**
+ * Claude Code writes one API response as several JSONL lines while streaming,
+ * each line repeating a cumulative copy of `message.usage`, so summing raw
+ * overcounts several times over. Per `message.id:requestId` the first sighting
+ * counts in full; a repeat contributes only the positive delta per counter.
+ * A record with no `message.id` has no key and counts in full.
+ *
+ * The returned delta also carries `first` - true on the first sighting of a key
+ * (or for a keyless record). That is what a turn count increments on: the later
+ * streamed copies of one API response are the same turn.
+ */
+function createUsageDeduper() {
+  const seen = new Map();
+  return (row) => {
+    const cur = {
+      input: row.input || 0,
+      output: row.output || 0,
+      cacheCreate: row.cacheCreate || 0,
+      cacheRead: row.cacheRead || 0,
+    };
+    const key = row.id ? row.id + ':' + (row.requestId || '') : null;
+    if (!key) return { ...cur, first: true };
+    const prev = seen.get(key);
+    if (!prev) { seen.set(key, cur); return { ...cur, first: true }; }
+    const delta = { first: false };
+    for (const c of USAGE_KEYS) {
+      delta[c] = cur[c] > prev[c] ? cur[c] - prev[c] : 0;
+      if (cur[c] > prev[c]) prev[c] = cur[c];
+    }
+    return delta;
+  };
+}
+
+/** The deduper input for an assistant record, or null when it carries no usage. */
+function usageRow(rec) {
+  const u = rec?.message?.usage;
+  if (!u) return null;
+  return {
+    id: rec.message.id || null,
+    requestId: rec.requestId || null,
+    input: u.input_tokens || 0,
+    output: u.output_tokens || 0,
+    cacheCreate: u.cache_creation_input_tokens || 0,
+    cacheRead: u.cache_read_input_tokens || 0,
+  };
+}
+
+/** The model a row is filed under. `<synthetic>` is the CLI's own placeholder for
+ *  a locally generated assistant message, not a model that ran. */
+function modelKey(model) {
+  return model && model !== '<synthetic>' ? model : 'unknown';
+}
+
+function addUsage(acc, d) {
+  for (const c of USAGE_KEYS) acc[c] += d[c] || 0;
+  acc.total = acc.input + acc.output + acc.cacheCreate + acc.cacheRead;
+  return acc;
+}
+
 // One entry per transcript file, keyed by `size:mtimeMs`. Transcripts are
 // append-only, so an unchanged size+mtime means an unchanged parse. Without this
 // the sessions list re-reads every file (60+ folders, hundreds of KB each) on
 // every 30 s dashboard refresh. In memory only - never persisted.
 const summaryCache = new Map();
 
+// Subagent transcripts are written while the main file sits unchanged, so their
+// totals cannot live behind `summaryCache`'s size+mtime of the main file. They
+// get their own cache, keyed by a signature over the whole subagent tree.
+const subagentCache = new Map();
+
 export function clearSummaryCache() {
   summaryCache.clear();
+  subagentCache.clear();
 }
 
 function summarizeSessionFile(filePath, sessionId) {
@@ -123,6 +201,13 @@ function summarizeSessionFile(filePath, sessionId) {
   let gitBranch = null;
   let version = null;
   const models = new Set();
+  // One deduper per session file - the key space is per API response, and
+  // sharing it across sessions would cancel a resumed session's copied history.
+  const dedupe = createUsageDeduper();
+  const usage = emptyUsage();
+  // Same pass, same deduper as `usage`: one row per model the main thread ran,
+  // so `/model` mid-session shows as two rows instead of one blended number.
+  const byModel = new Map();
 
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -147,8 +232,19 @@ function summarizeSessionFile(filePath, sessionId) {
 
     if (rec.type === 'user' || rec.type === 'assistant') {
       messages++;
-      if (rec.type === 'assistant' && rec.message?.model && rec.message.model !== '<synthetic>') {
-        models.add(rec.message.model);
+      if (rec.type === 'assistant') {
+        if (rec.message?.model && rec.message.model !== '<synthetic>') models.add(rec.message.model);
+        // Sidechain records were skipped above: their tokens are counted from
+        // the subagent transcripts instead, never twice.
+        const row = usageRow(rec);
+        if (row) {
+          const d = dedupe(row);
+          addUsage(usage, d);
+          const mk = modelKey(rec.message?.model);
+          let m = byModel.get(mk);
+          if (!m) { m = { model: mk, input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 }; byModel.set(mk, m); }
+          addUsage(m, d);
+        }
       }
       if (rec.type === 'user' && !firstUserText && !rec.isMeta) {
         const text = summarizeUserText(firstTextOf(rec.message?.content));
@@ -169,10 +265,184 @@ function summarizeSessionFile(filePath, sessionId) {
     gitBranch,
     version,
     bytes: st.size,
+    usage,
+    usageByModel: [...byModel.values()].sort((a, b) => b.total - a.total),
   };
 
   summaryCache.set(key, { signature, value });
   return value;
+}
+
+function subagentDirSignature(base, files) {
+  const parts = [];
+  for (const f of files) {
+    try {
+      const st = fs.statSync(f);
+      parts.push(`${path.relative(base, f)}:${st.size}:${Math.round(st.mtimeMs)}`);
+    } catch { /* raced with a delete - the next poll re-signs the tree */ }
+  }
+  return parts.join('|');
+}
+
+/** The agent's identity, most authoritative first:
+ *  1. the `agent-<id>.meta.json` sidecar's `agentType` (written for both plain
+ *     Task subagents and agent-team members);
+ *  2. an agent-team member self-identifying as `You are "name"` in its first
+ *     string user record;
+ *  3. a neutral fallback. */
+function resolveAgentName(filePath, firstUser) {
+  try {
+    const meta = JSON.parse(fs.readFileSync(filePath.replace(/\.jsonl$/, '.meta.json'), 'utf8'));
+    if (meta && meta.agentType) return String(meta.agentType);
+  } catch { /* no sidecar, or it is not JSON */ }
+  const match = firstUser && firstUser.match(/You are ["“]([^"”]+)["”]/);
+  return (match && match[1]) || 'subagent';
+}
+
+/**
+ * Per-agent rows for one session, `{ agentCount, totals, agents[] }`. `totals` is
+ * null when the session spawned no agents. One row per (name, model) pair;
+ * `spawns` counts the transcripts that fed the row, `turns` the API responses,
+ * `toolUses` the tool calls and `durationMs` the summed wall clock of those
+ * transcripts. `totals` covers tokens only.
+ */
+function readSubagentUsage(dir, sessionId) {
+  const base = path.join(dir, sessionId, 'subagents');
+  const files = listAgentTranscripts(dir, sessionId);
+  if (!files.length) return { agentCount: 0, totals: null, agents: [] };
+
+  const cacheKey = base.toLowerCase();
+  const signature = subagentDirSignature(base, files);
+  const cached = subagentCache.get(cacheKey);
+  if (cached && cached.signature === signature) return cached.value;
+
+  const byRow = new Map();
+  const totals = emptyUsage();
+  let agentCount = 0;
+
+  // Agent-team members each persist their own copy of the shared conversation
+  // turns, so one deduper spans ALL agent files of the session - a per-file
+  // deduper would count a shared turn once per teammate. Tool calls in such a
+  // shared turn would likewise repeat per teammate file, so they are deduped by
+  // `tool_use` block id across the whole session too.
+  const dedupe = createUsageDeduper();
+  const seenToolUseIds = new Set();
+
+  for (const file of files) {
+    let raw;
+    try { raw = fs.readFileSync(file, 'utf8'); } catch { continue; }
+
+    let firstUser = null;
+    // Wall clock spans every record type, not just assistant ones, so the time an
+    // agent spent waiting on its own tool calls counts.
+    let firstTs = null;
+    let lastTs = null;
+    // A subagent can run more than one model, so accumulate per model within the
+    // file and merge each into its own session-level row.
+    const perModel = new Map();
+    const ensure = (mk) => {
+      let acc = perModel.get(mk);
+      if (!acc) { acc = { ...emptyUsage(), turns: 0, toolUses: 0 }; perModel.set(mk, acc); }
+      return acc;
+    };
+
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      let rec;
+      try { rec = JSON.parse(line); } catch { continue; }
+
+      if (rec.timestamp) {
+        const ms = Date.parse(rec.timestamp);
+        if (!Number.isNaN(ms)) {
+          if (firstTs === null || ms < firstTs) firstTs = ms;
+          if (lastTs === null || ms > lastTs) lastTs = ms;
+        }
+      }
+
+      if (firstUser === null && rec.type === 'user' && typeof rec.message?.content === 'string') {
+        firstUser = rec.message.content;
+      }
+      if (rec.type !== 'assistant') continue;
+
+      const mk = modelKey(rec.message?.model);
+
+      if (Array.isArray(rec.message?.content)) {
+        for (const block of rec.message.content) {
+          if (block?.type !== 'tool_use') continue;
+          // A repeat of an already-counted call still proves this file ran the
+          // model, so the row is created either way - it just adds no tool use.
+          if (block.id && seenToolUseIds.has(block.id)) { ensure(mk); continue; }
+          if (block.id) seenToolUseIds.add(block.id);
+          ensure(mk).toolUses++;
+        }
+      }
+
+      const row = usageRow(rec);
+      if (!row) continue;
+      const d = dedupe(row);
+      const acc = ensure(mk);
+      addUsage(acc, d);
+      // One turn per API response: the later streamed copies of it are not turns.
+      if (d.first) acc.turns++;
+    }
+
+    if (perModel.size === 0) continue;
+    const name = resolveAgentName(file, firstUser);
+    agentCount++;
+
+    for (const [mk, acc] of perModel) {
+      // Keep a row even when dedupe left it at zero: a teammate whose turns were
+      // all attributed to an earlier file still ran, and dropping it would make
+      // the transcript silently missing from the list.
+      const key = name + ' ' + mk;
+      let g = byRow.get(key);
+      if (!g) {
+        g = { name, model: mk, spawns: 0, turns: 0, toolUses: 0, durationMs: 0, input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 };
+        byRow.set(key, g);
+      }
+      g.spawns++;
+      g.turns += acc.turns;
+      g.toolUses += acc.toolUses;
+      // The span is per transcript, so a file that ran two models gives its whole
+      // span to both rows - wall time has no per-model split.
+      if (firstTs !== null && lastTs > firstTs) g.durationMs += lastTs - firstTs;
+      addUsage(g, acc);
+      addUsage(totals, acc);
+    }
+  }
+
+  const agents = [...byRow.values()].sort((a, b) => b.total - a.total);
+  const value = { agentCount, totals: agentCount ? totals : null, agents };
+  subagentCache.set(cacheKey, { signature, value });
+  return value;
+}
+
+/**
+ * Token usage for one session: `main` (the session transcript, as `{ totals,
+ * byModel }`), `subagents` (its `<sessionId>/subagents/**.jsonl` rows) and the
+ * element-wise sum of both in `totals`. Tokens only - no cost anywhere.
+ */
+export function readSessionUsage(projectPath, sessionId, { home = os.homedir() } = {}) {
+  const empty = () => ({
+    totals: emptyUsage(),
+    main: { totals: emptyUsage(), byModel: [] },
+    subagents: { agentCount: 0, totals: null, agents: [] },
+  });
+  const dir = resolveTranscriptDir(projectPath, home);
+  if (!dir) return empty();
+
+  const summary = summarizeSessionFile(path.join(dir, sessionId + '.jsonl'), sessionId);
+  if (!summary) return empty();
+
+  // summary.usage and summary.usageByModel belong to the summary cache - copy
+  // before handing them out, since `totals` sums into its accumulator.
+  const main = {
+    totals: { ...summary.usage },
+    byModel: summary.usageByModel.map((m) => ({ ...m })),
+  };
+  const subagents = readSubagentUsage(dir, sessionId);
+  const totals = addUsage(addUsage(emptyUsage(), main.totals), subagents.totals || {});
+  return { totals, main, subagents };
 }
 
 /**
@@ -193,7 +463,11 @@ export function listSessions(projectPath, { home = os.homedir(), now = Date.now(
     const sessionId = entry.name.slice(0, -'.jsonl'.length);
     const summary = summarizeSessionFile(path.join(dir, entry.name), sessionId);
     if (!summary) continue;
-    summary.subagents = countSubagents(dir, sessionId);
+    // Still the transcript-file count, not readSubagentUsage's agentCount: a file
+    // with no assistant records is a spawned agent that has not answered yet.
+    summary.subagents = listAgentTranscripts(dir, sessionId).length;
+    const sub = readSubagentUsage(dir, sessionId);
+    summary.totalTokens = summary.usage.total + (sub.totals ? sub.totals.total : 0);
     summary.live = now - summary.lastWrite < LIVE_WINDOW_MS;
     out.push(summary);
   }

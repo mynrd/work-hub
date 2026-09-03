@@ -86,6 +86,62 @@ test('AC 4: a progress.json holding an array or a scalar is unreadable, not a jo
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+/** A temp project holding `specs` as job folders, each stamped to its own mtime. */
+function tempProject(specs) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-sort-'));
+  for (const { folder, progress, ms } of specs) {
+    const jobDir = path.join(dir, '.work', folder);
+    fs.mkdirSync(jobDir, { recursive: true });
+    fs.writeFileSync(path.join(jobDir, 'progress.json'), JSON.stringify(progress));
+    fs.utimesSync(path.join(jobDir, 'progress.json'), new Date(ms), new Date(ms));
+  }
+  return dir;
+}
+
+const OTHERS_PROGRESS = { workflow: [{ step: 'build', status: 'done' }], runs: [{ round: 1 }] };
+const NOT_STARTED_PROGRESS = { workflow: [{ step: 'build', status: 'pending' }], runs: [] };
+
+test('sort: others come back newest activity first, not in folder-name order', () => {
+  const dir = tempProject([
+    { folder: '2020-01-01-oldest-name-middle-activity', progress: OTHERS_PROGRESS, ms: LONG_AGO + 2000 },
+    { folder: '2020-02-02-middle-name-newest-activity', progress: OTHERS_PROGRESS, ms: LONG_AGO + 3000 },
+    { folder: '2020-03-03-newest-name-oldest-activity', progress: OTHERS_PROGRESS, ms: LONG_AGO + 1000 },
+  ]);
+  const model = scanWorkFolder(dir, { now: NOW });
+  assert.deepEqual(model.others.map((j) => j.folder), [
+    '2020-02-02-middle-name-newest-activity',
+    '2020-01-01-oldest-name-middle-activity',
+    '2020-03-03-newest-name-oldest-activity',
+  ]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('sort: equal lastActivity falls back to folder name descending', () => {
+  const dir = tempProject([
+    { folder: '2020-01-01-a', progress: OTHERS_PROGRESS, ms: LONG_AGO },
+    { folder: '2020-01-01-b', progress: OTHERS_PROGRESS, ms: LONG_AGO },
+    { folder: '2020-01-01-c', progress: OTHERS_PROGRESS, ms: LONG_AGO },
+  ]);
+  const model = scanWorkFolder(dir, { now: NOW });
+  assert.deepEqual(model.others.map((j) => j.folder), ['2020-01-01-c', '2020-01-01-b', '2020-01-01-a']);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('sort: today and notStarted are sorted the same way', () => {
+  const dir = tempProject([
+    { folder: '2026-08-29-today-earlier', progress: OTHERS_PROGRESS, ms: NOW - 3 * 60 * 60 * 1000 },
+    { folder: '2026-08-29-today-later', progress: OTHERS_PROGRESS, ms: NOW - 60 * 60 * 1000 },
+    { folder: '2020-01-01-ns-older', progress: NOT_STARTED_PROGRESS, ms: LONG_AGO },
+    { folder: '2020-01-02-ns-newer', progress: NOT_STARTED_PROGRESS, ms: LONG_AGO + 5000 },
+    { folder: '2020-01-03-ns-oldest', progress: NOT_STARTED_PROGRESS, ms: LONG_AGO - 5000 },
+  ]);
+  const model = scanWorkFolder(dir, { now: NOW });
+  assert.deepEqual(model.today.map((j) => j.folder), ['2026-08-29-today-later', '2026-08-29-today-earlier']);
+  assert.deepEqual(model.notStarted.map((j) => j.folder), ['2020-01-02-ns-newer', '2020-01-01-ns-older', '2020-01-03-ns-oldest']);
+  assert.ok(model.others.length === 0);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('AC 3: a project with no .work/ scans clean, with hasWorkDir false', () => {
   const model = scanWorkFolder(path.join(FIXTURES, 'proj-empty'), { now: NOW });
   assert.equal(model.missing, false);

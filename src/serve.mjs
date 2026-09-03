@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 import { loadConfig, saveConfig, configPath, encodeProjectId, resolveProjectId, validateProjectPath, MODELS, EFFORTS, PERMISSION_MODES } from './lib/config.mjs';
 import { scanWorkFolder } from './lib/workscan.mjs';
-import { listSessions, readSessionChat, resolveTranscriptDir } from './lib/transcripts.mjs';
+import { listSessions, readSessionChat, readSessionUsage, resolveTranscriptDir } from './lib/transcripts.mjs';
 import { createUsageCache } from './lib/usage.mjs';
 import { createRunRegistry } from './lib/claude-run.mjs';
 import { resolveJob } from './lib/resolve-job.mjs';
@@ -1137,9 +1137,10 @@ export function createServer({
         if (!sid) { sendJson(res, 400, { error: 'Invalid session id' }); return; }
 
         if (parts.length === 3 && req.method === 'GET') {
-          const chat = readSessionChat(projectPath, sid, home === undefined ? {} : { home });
+          const chatArgs = home === undefined ? {} : { home };
+          const chat = readSessionChat(projectPath, sid, chatArgs);
           if (!chat) { sendJson(res, 404, { error: 'No such conversation' }); return; }
-          sendJson(res, 200, chat);
+          sendJson(res, 200, { ...chat, usage: readSessionUsage(projectPath, sid, chatArgs) });
           return;
         }
         if (parts[3] === 'reply' && req.method === 'POST') {

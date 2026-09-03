@@ -1,25 +1,64 @@
 // The "Conversations" card: the Claude Code sessions whose working directory is
 // this project folder, plus the two buttons that start a new one.
 
-import { esc, shortId, relativeTime, emptyState } from '../dom.mjs';
+import { esc, shortId, relativeTime, emptyState, fmtTokens } from '../dom.mjs';
 import { state } from '../state.mjs';
 import { api } from '../api.mjs';
 import { app, renderCurrentPage } from '../render.mjs';
 
-const SESSIONS_PER_PAGE = 20;
+const SESSIONS_PER_PAGE = 10;
 let snappedSid = null;   // the conversation the pager has already jumped to
+// Where the caret was when the repaint took the focused search box away with it.
+let findFocus = { on: false, start: 0, end: 0 };
+let findTimer = null;
 
 /** Called when a conversation is opened, so the next paint re-snaps the pager. */
-export function resetSessionSnap() { snappedSid = null; }
+export function resetSessionSnap() {
+  snappedSid = null;
+  findFocus = { on: false, start: 0, end: 0 };
+  if (findTimer) { clearTimeout(findTimer); findTimer = null; }
+}
 
 function sessionRowHtml(pid, s, activeSid) {
-  var meta = [shortId(s.sessionId), s.messages + ' msg', relativeTime(s.lastWrite)];
+  var meta = [shortId(s.sessionId), s.messages + ' msg'];
+  // Payloads cached before the server sent this field have no count at all, and
+  // "undefined tok" must never reach a row.
+  if (typeof s.totalTokens === 'number' && s.totalTokens > 0) meta.push(fmtTokens(s.totalTokens) + ' tok');
+  meta.push(relativeTime(s.lastWrite));
   if (s.models && s.models.length) meta.push(s.models.map(function (m) { return m.replace(/^claude-/, ''); }).join(', '));
   if (s.subagents) meta.push(s.subagents + ' subagent' + (s.subagents === 1 ? '' : 's'));
   return '<a class="sess__row' + (s.sessionId === activeSid ? ' is-active' : '') + '" href="#/p/' + esc(pid) + '/s/' + esc(s.sessionId) + '">' +
     '<span class="sess__title">' + (s.live ? '<span class="dot-live"></span>' : '') + '<span class="txt">' + esc(s.title) + '</span></span>' +
     '<span class="sess__meta">' + meta.map(function (m) { return '<span>' + esc(m) + '</span>'; }).join('') + '</span>' +
   '</a>';
+}
+
+/**
+ * The rows this paint works on. The search runs before the pager, so the page
+ * count, the "x-y of N" and the page-snap all describe the matches, not the
+ * whole list.
+ */
+function filteredSessions(pid, sessions) {
+  var needle = (state.sessSearch[pid] || '').trim().toLowerCase();
+  if (!needle) return sessions;
+  return sessions.filter(function (s) {
+    return String(s.title || '').toLowerCase().indexOf(needle) !== -1 ||
+      String(s.sessionId || '').toLowerCase().indexOf(needle) !== -1;
+  });
+}
+
+function findHtml(pid, shown) {
+  var q = state.sessSearch[pid] || '';
+  return '<div class="sess-find">' +
+    '<div class="sess-find__box">' +
+      '<svg class="icon icon-sm"><use href="#i-search"/></svg>' +
+      '<input type="search" id="sessFind" autocomplete="off" placeholder="Search conversations…" aria-label="Search conversations" value="' + esc(q) + '" />' +
+      (q
+        ? '<button type="button" class="sess-find__clear" id="sessFindClear" aria-label="Clear search" title="Clear search"><svg class="icon icon-sm"><use href="#i-x"/></svg></button>'
+        : '') +
+    '</div>' +
+    (q.trim() ? '<span class="sess-find__count">' + shown + ' match' + (shown === 1 ? '' : 'es') + '</span>' : '') +
+  '</div>';
 }
 
 /** Clamps the stored page to what the current list actually has. */
@@ -67,20 +106,81 @@ export function sessionsCardHtml(pid, activeSid) {
   // opening one moves the pager to whichever page holds it. Once only: the
   // chat repaints every 3 seconds during a run, and re-snapping each time
   // would undo a Next click the moment the poll came back.
+  // A search the open conversation does not match leaves nothing to snap to, so
+  // the jump stays pending and happens when the search is cleared.
+  var list = filteredSessions(pid, data.sessions);
   if (activeSid && snappedSid !== activeSid) {
-    for (var i = 0; i < data.sessions.length; i++) {
-      if (data.sessions[i].sessionId === activeSid) { state.sessPage[pid] = Math.floor(i / SESSIONS_PER_PAGE); break; }
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].sessionId === activeSid) {
+        state.sessPage[pid] = Math.floor(i / SESSIONS_PER_PAGE);
+        snappedSid = activeSid;
+        break;
+      }
     }
-    snappedSid = activeSid;
   }
-  var page = sessionPage(pid, data.sessions.length);
-  var slice = data.sessions.slice(page * SESSIONS_PER_PAGE, (page + 1) * SESSIONS_PER_PAGE);
-  return '<div class="card">' + head + '<div class="sess">' +
+  var find = findHtml(pid, list.length);
+  if (list.length === 0) {
+    return '<div class="card">' + head + find + emptyState('No match', 'No conversation matches your search.') + '</div>';
+  }
+  var page = sessionPage(pid, list.length);
+  var slice = list.slice(page * SESSIONS_PER_PAGE, (page + 1) * SESSIONS_PER_PAGE);
+  return '<div class="card">' + head + find + '<div class="sess">' +
     slice.map(function (s) { return sessionRowHtml(pid, s, activeSid); }).join('') + '</div>' +
-    pagerHtml(page, data.sessions.length) + '</div>';
+    pagerHtml(page, list.length) + '</div>';
+}
+
+/* The card is repainted every 3 seconds while a run is live, which replaces the
+   input this caret was in. Without putting it back, typing in the search box
+   beside a running conversation would be impossible. */
+function wireSessionFind(pid) {
+  var clear = document.getElementById('sessFindClear');
+  if (clear) {
+    clear.addEventListener('click', function () {
+      state.sessSearch[pid] = '';
+      state.sessPage[pid] = 0;
+      findFocus.on = false;
+      renderCurrentPage();
+    });
+  }
+
+  var find = document.getElementById('sessFind');
+  if (!find) return;
+  var remember = function () { findFocus = { on: true, start: find.selectionStart, end: find.selectionEnd }; };
+  find.addEventListener('focus', remember);
+  find.addEventListener('keyup', remember);
+  find.addEventListener('click', remember);
+  // Only a blur the reader caused counts. Firefox also fires one when the
+  // repaint tears the input out of the document, and that must not read as
+  // "they left the box".
+  find.addEventListener('blur', function () { if (find.isConnected) findFocus.on = false; });
+  find.addEventListener('input', function () {
+    remember();
+    state.sessSearch[pid] = find.value;
+    // Page 3 of a list the filter cut to one page would show nothing.
+    state.sessPage[pid] = 0;
+    if (findTimer) clearTimeout(findTimer);
+    findTimer = setTimeout(function () { findTimer = null; renderCurrentPage(); }, 200);
+  });
+  find.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && find.value) {
+      e.preventDefault();
+      state.sessSearch[pid] = '';
+      state.sessPage[pid] = 0;
+      renderCurrentPage();
+    }
+  });
+
+  if (findFocus.on) {
+    var start = findFocus.start;
+    var end = findFocus.end;
+    find.focus();
+    find.setSelectionRange(start, end);
+    findFocus = { on: true, start: start, end: end };
+  }
 }
 
 export function wireSessionPager(pid) {
+  wireSessionFind(pid);
   var pager = app.querySelector('.pager');
   if (!pager) return;
   pager.querySelectorAll('button[data-page]').forEach(function (btn) {

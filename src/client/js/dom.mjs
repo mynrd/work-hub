@@ -60,7 +60,35 @@ export function elapsed(startIso, endIso) {
   return day + 'd' + (hr % 24 ? ' ' + (hr % 24) + 'h' : '');
 }
 
+/** A span of milliseconds in the width of a table cell: `45s`, `4m 50s`, `1h 12m`.
+ *  '' for anything that is not a positive number, so callers can print a dash. */
+export function fmtDuration(ms) {
+  var v = Number(ms);
+  if (!isFinite(v) || v <= 0) return '';
+  var sec = Math.round(v / 1000);
+  if (sec < 60) return sec + 's';
+  var min = Math.floor(sec / 60);
+  if (min < 60) return min + 'm' + (sec % 60 ? ' ' + (sec % 60) + 's' : '');
+  var hr = Math.floor(min / 60);
+  return hr + 'h' + (min % 60 ? ' ' + (min % 60) + 'm' : '');
+}
+
 export function shortId(sid) { return String(sid || '').slice(0, 8); }
+
+/** A token count in the width a table cell has: `512`, `38.4k`, `1.2M`. */
+export function fmtTokens(n) {
+  var v = Number(n);
+  if (!isFinite(v) || v <= 0) return '0';
+  var scaled = function (x, suffix) {
+    var s = x.toFixed(1);
+    if (s.slice(-2) === '.0') s = s.slice(0, -2);
+    return s + suffix;
+  };
+  if (v < 1000) return String(Math.round(v));
+  // 999999 reads as 1M, not 1000k: rounding to one decimal is what decides the unit.
+  if (v < 999950) return scaled(v / 1000, 'k');
+  return scaled(v / 1000000, 'M');
+}
 
 export function listLen(v) { return Array.isArray(v) ? v.length : 0; }
 

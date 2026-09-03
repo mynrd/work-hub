@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-import { goto, project, projectId, topbar, cardTitled, jobRow, projectTabs, gitPane } from '../support/app.mjs';
+import { goto, project, projectId, topbar, cardTitled, jobRow, projectTabs, gitPane, othersFind } from '../support/app.mjs';
 
 test.beforeEach(async ({ page }) => {
   await goto(page, '#/');
@@ -155,6 +155,93 @@ test('search filters job rows across every group', async ({ page }) => {
 
   await topbar(page).search.fill('');
   await expect(page.locator('tr[data-folder]').first()).toBeVisible();
+});
+
+/* The Others card carries its own search box - that group is the long tail,
+   and the topbar search filters all three tables at once. */
+test('only the Others card has an in-card search box', async ({ page }) => {
+  await expect(cardTitled(page, 'Others').locator('#jobFind')).toHaveCount(1);
+  await expect(cardTitled(page, 'Worked today').locator('.sess-find')).toHaveCount(0);
+  await expect(cardTitled(page, 'Not yet started').locator('.sess-find')).toHaveCount(0);
+});
+
+test('typing in the Others search filters that table, its badge and its match count', async ({ page }) => {
+  const find = othersFind(page);
+  await find.input.fill('awaiting');
+
+  const rows = cardTitled(page, 'Others').locator('tr[data-folder]');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText('Green and awaiting verification');
+  await expect(cardTitled(page, 'Others').locator('.card__head .badge')).toHaveText('1');
+  await expect(find.count).toHaveText('1 match');
+  // The other cards are untouched - this box is not the topbar.
+  await expect(cardTitled(page, 'Worked today')).toContainText('A job touched today');
+});
+
+test('an Others search that matches nothing shows the empty state, box included', async ({ page }) => {
+  const find = othersFind(page);
+  await find.input.fill('zzz-no-such-job');
+  await expect(cardTitled(page, 'Others')).toContainText('No jobs match your search');
+  // The box has to survive the empty state, or the filter cannot be cleared.
+  await expect(find.input).toHaveValue('zzz-no-such-job');
+});
+
+test('the Others clear button empties the filter', async ({ page }) => {
+  const find = othersFind(page);
+  await find.input.fill('resolved');
+  await expect(find.clear).toBeVisible();
+
+  await find.clear.click();
+  await expect(find.input).toHaveValue('');
+  await expect(find.clear).toHaveCount(0);
+  await expect(cardTitled(page, 'Others').locator('tr[data-folder]')).toHaveCount(3);
+});
+
+test('the Others search and the topbar search both have to match', async ({ page }) => {
+  const find = othersFind(page);
+  const rows = cardTitled(page, 'Others').locator('tr[data-folder]');
+
+  await topbar(page).search.fill('a');
+  await find.input.fill('resolved');
+  await expect(rows).toHaveCount(1);
+
+  await topbar(page).search.fill('awaiting');
+  await expect(find.input).toHaveValue('resolved');
+  await expect(cardTitled(page, 'Others')).toContainText('No jobs match your search');
+
+  await topbar(page).search.fill('');
+  await othersFind(page).input.fill('');
+  await expect(rows).toHaveCount(3);
+});
+
+test('the Others search text and caret survive a repaint', async ({ page }) => {
+  const find = othersFind(page);
+  await find.input.fill('resol');
+
+  // dispatchEvent, not click: a real click moves focus to the button, which is
+  // the reader leaving the box on purpose. What has to survive is the repaint
+  // the 30s timer causes, and this fires exactly that handler.
+  await page.locator('#projectRefreshBtn').dispatchEvent('click');
+  await expect(page.locator('#projectRefreshLabel')).toHaveText('Refresh');
+
+  await expect(othersFind(page).input).toHaveValue('resol');
+  await expect(othersFind(page).input).toBeFocused();
+  await expect(cardTitled(page, 'Others').locator('tr[data-folder]')).toHaveCount(1);
+});
+
+test('the Others search is per project', async ({ page }) => {
+  await othersFind(page).input.fill('resolved');
+  await expect(cardTitled(page, 'Others').locator('tr[data-folder]')).toHaveCount(1);
+
+  await goto(page, `#/p/${await projectId(page, 'proj-empty')}`);
+  await expect(page.locator('.page-head h1')).toHaveText('proj-empty');
+  // proj-empty has no .work at all, so the card may be all empty state - what
+  // matters is that proj-a's text did not follow it here.
+  const emptyFind = othersFind(page).input;
+  if (await emptyFind.count()) await expect(emptyFind).toHaveValue('');
+
+  await goto(page, `#/p/${await projectId(page, 'proj-a')}`);
+  await expect(othersFind(page).input).toHaveValue('resolved');
 });
 
 test('Refresh re-scans this folder and restores the button', async ({ page }) => {

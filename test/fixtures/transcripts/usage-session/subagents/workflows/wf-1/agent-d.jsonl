@@ -1,0 +1,2 @@
+{"type":"user","isSidechain":true,"message":{"role":"user","content":"Nested workflow researcher."},"timestamp":"2026-08-30T01:00:14.000Z"}
+{"type":"assistant","isSidechain":true,"requestId":"req_e","message":{"role":"assistant","id":"msg_s5","model":"claude-fable-5","content":[{"type":"text","text":"Nested work"}],"usage":{"input_tokens":100,"output_tokens":10}},"timestamp":"2026-08-30T01:00:15.000Z"}

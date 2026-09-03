@@ -150,6 +150,8 @@ export function buildTestEnv() {
   const projA = path.join(home, 'projects', 'proj-a');
   copyDir(path.join(FIXTURES, 'proj-a'), projA);
   touchTree(path.join(projA, '.work', TODAY_JOB), new Date());
+  // The Others order assertion needs distinct mtimes, so this one is stamped too.
+  touchTree(path.join(projA, '.work', '2020-02-02-others'), new Date('2020-02-02T00:00:00Z'));
 
   const resolved = path.join(projA, '.work', RESOLVED_JOB.folder);
   fs.mkdirSync(resolved, { recursive: true });

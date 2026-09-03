@@ -175,6 +175,26 @@
 .sess__title span.txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess__meta { font-size: 11px; color: var(--fg-subtle); font-family: var(--font-mono); display: flex; gap: var(--s-3); flex-wrap: wrap; }
 
+/* Its own row above the rows: on the conversation page this card is a narrow
+   column, and the head already carries the New and Terminal buttons. */
+.sess-find { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--border); }
+.sess-find__box { position: relative; display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }
+.sess-find__box > .icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--fg-subtle); pointer-events: none; }
+.sess-find input {
+  width: 100%; height: 32px; padding: 0 30px; border-radius: var(--r-pill);
+  border: 1px solid var(--border); background: var(--surface-2); font-size: var(--fs-sm);
+}
+.sess-find input::placeholder { color: var(--fg-subtle); }
+.sess-find input:focus { outline: none; background: var(--surface); border-color: var(--accent-400); box-shadow: 0 0 0 3px var(--ring); }
+/* The native clear cross would sit on top of the one that clears the search. */
+.sess-find input::-webkit-search-cancel-button { display: none; }
+.sess-find__clear {
+  position: absolute; right: 4px; width: 24px; height: 24px; display: grid; place-items: center;
+  border: none; background: none; color: var(--fg-subtle); border-radius: var(--r-pill);
+}
+.sess-find__clear:hover { color: var(--fg); background: var(--surface-3); }
+.sess-find__count { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-muted); white-space: nowrap; }
+
 /* ---------- Chat ---------- */
 .chat { display: flex; flex-direction: column; gap: var(--s-3); }
 .msg { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); overflow: hidden; }
@@ -218,6 +238,77 @@
 .ctx-row { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); color: var(--fg-muted); flex-wrap: wrap; }
 .ctx-badge { background: var(--surface-3); color: var(--fg-subtle); border-radius: var(--r-pill); padding: 2px 9px; font-weight: 650; font-size: 11px; }
 .ctx-path { font-family: var(--font-mono); overflow-wrap: anywhere; }
+
+/* ---------- Conversation tools: token box, find, chat pager ----------
+
+   Sticky under the topbar so the token totals, the find box and the pager stay
+   reachable however far down the transcript the reader is. z-index because a
+   sticky strip and the messages scrolling under it are in the same stack. */
+.convtools {
+  position: sticky; top: calc(var(--topbar-h) + var(--s-3)); z-index: 5;
+  display: flex; flex-direction: column; gap: var(--s-2);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm); padding: var(--s-2) var(--s-3);
+}
+.convtools__bar { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.tok__head {
+  flex: 1 1 180px; min-width: 0; display: flex; align-items: center; gap: var(--s-2);
+  background: none; border: none; padding: var(--s-1) 0; color: inherit; text-align: left;
+}
+.tok__head::before { content: "▸"; color: var(--fg-subtle); }
+.tok__head[aria-expanded="true"]::before { content: "▾"; }
+.tok__title { font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--fg-muted); }
+.tok__sum { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tok__body {
+  border-top: 1px solid var(--border); padding-top: var(--s-3);
+  display: flex; flex-direction: column; gap: var(--s-4); min-width: 0;
+}
+.tok-sec { min-width: 0; }
+.tok-sec__head { display: flex; align-items: center; gap: var(--s-2); padding: 0 0 var(--s-2) var(--s-1); }
+.tok-sec__title { font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--fg-muted); }
+.tok-sec__count { font-size: 11px; font-weight: 650; color: var(--fg-subtle); background: var(--surface-3); border-radius: var(--r-pill); padding: 1px 8px; }
+/* The subagent table is ten columns wide. It scrolls inside its own wrap; the
+   page itself must never gain a sideways scroll at any width. */
+.tok__body .table-wrap { overflow-x: auto; max-width: 100%; }
+.tok__body .table thead th { padding: var(--s-2) var(--s-3); }
+.tok__body .table tbody td { padding: var(--s-2) var(--s-3); font-size: var(--fs-xs); white-space: nowrap; }
+.tok__body .table tbody tr.tok-row--total td { font-weight: 650; background: var(--surface-2); }
+.tok-agent { overflow-wrap: anywhere; }
+.tok-chip {
+  display: inline-block; font-family: var(--font-mono); font-size: 11px; line-height: 1.7;
+  padding: 0 8px; border-radius: var(--r-pill); background: var(--surface-3); color: var(--fg-muted); font-weight: 500;
+}
+.tok-chip--spawns { margin-left: var(--s-2); background: var(--accent-50); color: var(--accent-700); }
+[data-theme="dark"] .tok-chip--spawns { background: color-mix(in srgb, var(--accent-500) 20%, transparent); color: var(--accent-300); }
+.tok-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: var(--s-2) var(--s-3); font-size: var(--fs-xs); color: var(--fg-muted);
+}
+.tok-foot__value { font-family: var(--font-mono); font-weight: 700; color: var(--fg); }
+
+.chat-find { position: relative; display: flex; align-items: center; flex: 1 1 200px; max-width: 340px; }
+.chat-find > .icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--fg-subtle); pointer-events: none; }
+.chat-find input {
+  width: 100%; height: 32px; padding: 0 30px; border-radius: var(--r-pill);
+  border: 1px solid var(--border); background: var(--surface-2); font-size: var(--fs-sm);
+}
+.chat-find input::placeholder { color: var(--fg-subtle); }
+.chat-find input:focus { outline: none; background: var(--surface); border-color: var(--accent-400); box-shadow: 0 0 0 3px var(--ring); }
+/* The native clear cross would sit on top of the one that reports the count. */
+.chat-find input::-webkit-search-cancel-button { display: none; }
+.chat-find__clear {
+  position: absolute; right: 4px; width: 24px; height: 24px; display: grid; place-items: center;
+  border: none; background: none; color: var(--fg-subtle); border-radius: var(--r-pill);
+}
+.chat-find__clear:hover { color: var(--fg); background: var(--surface-3); }
+.chat-find__count { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-muted); }
+
+/* Not `.pager`: that class is wired by the sessions list. */
+.chat-pager { display: flex; align-items: center; gap: var(--s-2); }
+.convtools > .chat-pager { border-top: 1px solid var(--border); padding-top: var(--s-2); }
+
+.hl { background: var(--warning-bg); color: inherit; border-radius: 3px; padding: 0 1px; }
 
 /* ---------- Git (Branch and Commits tab) ---------- */
 .git-group + .git-group { margin-top: var(--s-4); }

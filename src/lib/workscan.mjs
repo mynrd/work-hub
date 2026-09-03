@@ -236,5 +236,11 @@ export function scanWorkFolder(projectPath, { activeWindowMinutes = 30, now = Da
     result[groupFor(parsed, job.lastActivity, now)].push(job);
   }
 
+  // readdirSync hands the folders back by name, which is oldest job first.
+  // Newest activity first is what the tables want; equal mtimes fall back to
+  // folder name descending so the order is deterministic.
+  const byActivityDesc = (a, b) => (b.lastActivity - a.lastActivity) || b.folder.localeCompare(a.folder);
+  for (const key of ['today', 'notStarted', 'others']) result[key].sort(byActivityDesc);
+
   return result;
 }

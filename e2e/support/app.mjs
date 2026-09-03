@@ -95,6 +95,13 @@ export const gitPane = (page) => ({
 export const jobRow = (page, title) =>
   page.locator('tr[data-folder]').filter({ has: page.locator('td.cell-title', { hasText: title }) });
 
+/** The in-card search box on the project page's Others job table. */
+export const othersFind = (page) => ({
+  input: page.locator('#jobFind'),
+  clear: page.locator('#jobFindClear'),
+  count: page.locator('.sess-find__count'),
+});
+
 /** The project page's Terminal tab: a strip of real shells, one xterm each. */
 export const terminalPane = (page) => ({
   card: page.locator('#termCard'),
