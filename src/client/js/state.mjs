@@ -21,6 +21,7 @@ export const state = {
   chatSearch: '',      // find-in-conversation text; '' is the normal paged view
   chatSearchPage: 0,   // 0-based page within the matches
   chatUsageOpen: false,// is the token box expanded
+  chatMax: false,      // is the transcript filling the window (read-only, no composer)
   activeRun: null,
   search: '',
   error: null,

@@ -39,17 +39,33 @@ function renderConversation() {
       : '<div class="chat">' + view.messages.map(messageHtml).join('') + '</div>' + chatPagerHtml(view);
   }
 
+  // Full screen is for reading a transcript: topbar, page head, session list and
+  // composer all go (see .is-conv-max in views.css), leaving the token/find
+  // strip pinned above the messages. Everything still scrolls the window, so
+  // auto-follow and the scroll-jump button behave exactly as they do normally.
+  var max = !!state.chatMax;
+  document.body.classList.toggle('is-conv-max', max);
+
   setApp(
+    (max
+      ? '<button type="button" class="icon-btn conv-restore" id="convRestoreBtn" title="Restore" aria-label="Restore">' +
+          '<svg class="icon icon-sm"><use href="#i-minimize"/></svg></button>'
+      : '') +
     '<div class="page-head"><div>' +
       '<h1>' + esc(isNew ? 'New conversation' : (summary ? summary.title : shortId(sid))) + '</h1>' +
       '<p class="mono">' + esc(project ? project.path : '') + (isNew ? '' : ' · ' + esc(shortId(sid))) + '</p></div>' +
-      '<a class="btn btn-secondary" href="#/p/' + esc(pid) + '"><svg class="icon"><use href="#i-back"/></svg> ' + esc(project ? project.name : 'Project') + '</a>' +
+      '<div class="row gap-2">' +
+        '<a class="btn btn-secondary" href="#/p/' + esc(pid) + '"><svg class="icon"><use href="#i-back"/></svg> ' + esc(project ? project.name : 'Project') + '</a>' +
+        '<button type="button" class="icon-btn" id="convMaxBtn" title="Maximise" aria-label="Maximise">' +
+          '<svg class="icon"><use href="#i-maximize"/></svg></button>' +
+      '</div>' +
     '</div>' +
     '<div class="conv-layout">' +
       '<div class="conv-list">' + sessionsCardHtml(pid, sid) + '</div>' +
       '<div class="col gap-4">' + tools + body + composerHtml(isNew ? null : sid) + '</div>' +
     '</div>'
   );
+  wireConvMax();
   wireComposer(pid, isNew ? null : sid);
   wireNewConversation(pid);
   wireTerminal(pid);
@@ -59,6 +75,29 @@ function renderConversation() {
     if (view.searching) highlightChat(view.query);
   }
   scrollChatToEnd(sid, view);
+}
+
+/* Full screen is a repaint like any other: the flag lives in state, so the 3
+   second poll cannot undo it. A reader already at the newest message stays
+   there - removing the page head and the composer changes the page height, and
+   without this the last line would drift off the bottom. */
+function setConvMax(on) {
+  state.chatMax = on;
+  var wasAtEnd = chatScroll.atEnd;
+  renderCurrentPage();
+  if (!wasAtEnd) return;
+  requestAnimationFrame(function () {
+    var el = document.scrollingElement || document.documentElement;
+    el.scrollTop = el.scrollHeight;
+    chatScroll.atEnd = true;
+  });
+}
+
+function wireConvMax() {
+  var maxBtn = document.getElementById('convMaxBtn');
+  if (maxBtn) maxBtn.addEventListener('click', function () { setConvMax(true); });
+  var restoreBtn = document.getElementById('convRestoreBtn');
+  if (restoreBtn) restoreBtn.addEventListener('click', function () { setConvMax(false); });
 }
 
 /* A conversation opens at its newest message, the way every chat client does.
@@ -107,6 +146,7 @@ function enterConversation() {
   state.chatSearch = '';
   state.chatSearchPage = 0;
   state.chatUsageOpen = false;
+  state.chatMax = false;
   chatScroll = { sid: null, count: -1, atEnd: true };
   resetSessionSnap();
   resetChatTools();

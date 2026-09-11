@@ -18,6 +18,9 @@ export function navigate() {
   clearTimers();
   state.route = parseRoute();
   state.error = null;
+  // A full-screen transcript belongs to the page that was open; the next page
+  // gets its own chrome back.
+  document.body.classList.remove('is-conv-max');
   enterCurrentPage();
 }
 

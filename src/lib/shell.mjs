@@ -35,6 +35,56 @@ import crypto from 'node:crypto';
 /** Replay buffer cap per shell. Enough to repaint a busy screen. */
 const MAX_BUFFER_BYTES = 256 * 1024;
 
+/* Modes a program turns on once, at startup, and then relies on for the rest of
+   its run - mouse reporting above all. They arrive as a single escape sequence
+   that a busy shell soon pushes out of the bounded buffer above, and a page
+   attaching after that replays output with no trace of them. The fresh xterm
+   then never learns the program wanted wheel events, so the terminal cannot be
+   scrolled at all - not by a wheel, not by anything imitating one. Tracking
+   them apart from the bytes, and replaying them ahead of the buffer, is what
+   makes a reattached terminal behave like the one that was there before. */
+const STICKY_MODES = new Set([
+  1,                 // application cursor keys
+  25,                // cursor visible
+  1000, 1002, 1003,  // mouse reporting: clicks, drag, any motion
+  1004,              // focus in/out
+  1005, 1006, 1015,  // mouse coordinate encodings
+  2004,              // bracketed paste
+]);
+
+/** DEC private mode set/reset: ESC [ ? <params> h|l */
+const MODE_RE = /\u001b\[\?([0-9;]*)([hl])/g;
+/** Longest unterminated sequence worth carrying into the next chunk. */
+const MODE_TAIL_MAX = 32;
+
+/** Folds the mode changes in one chunk into the shell's mode set. */
+function trackModes(shell, data) {
+  const text = shell.modeTail + data;
+  MODE_RE.lastIndex = 0;
+  let m;
+  while ((m = MODE_RE.exec(text)) !== null) {
+    const on = m[2] === 'h';
+    for (const part of m[1].split(';')) {
+      const code = Number(part);
+      if (!part || !STICKY_MODES.has(code)) continue;
+      if (on) shell.modes.add(code); else shell.modes.delete(code);
+    }
+  }
+  // A sequence can be split across two chunks, so an escape with no terminator
+  // yet is carried over. Re-scanning a carried fragment is harmless: setting or
+  // clearing a mode twice lands in the same place.
+  const esc = text.lastIndexOf('\u001b');
+  const tail = esc === -1 ? '' : text.slice(esc);
+  shell.modeTail = tail && tail.length <= MODE_TAIL_MAX && !/[hl]/.test(tail) ? tail : '';
+}
+
+/** The escapes that put a reattaching terminal back into the modes the program set. */
+function modePrefix(shell) {
+  let out = '';
+  for (const code of shell.modes) out += `\u001b[?${code}h`;
+  return out;
+}
+
 /** One POST of keystrokes may not exceed this. Pasted text stays well under it. */
 const MAX_INPUT_BYTES = 16 * 1024;
 
@@ -157,6 +207,8 @@ export function createShellRegistry({
       startedAt,
       exitCode: null,
       buffer: '',
+      modes: new Set(),
+      modeTail: '',
       listeners: new Set(),
       pty: null,
       name: null,
@@ -182,6 +234,7 @@ export function createShellRegistry({
     shells.set(shellId, shell);
 
     proc.onData((data) => {
+      trackModes(shell, data);
       shell.buffer += data;
       if (shell.buffer.length > MAX_BUFFER_BYTES) {
         shell.buffer = shell.buffer.slice(shell.buffer.length - MAX_BUFFER_BYTES);
@@ -205,7 +258,7 @@ export function createShellRegistry({
     shell.listeners.add(listener);
     return {
       ok: true,
-      replay: shell.buffer,
+      replay: modePrefix(shell) + shell.buffer,
       running: shell.running,
       unsubscribe: () => { shell.listeners.delete(listener); },
     };

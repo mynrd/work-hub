@@ -81,8 +81,20 @@ export function terminalPaneHtml(pid) {
         '<button type="button" class="icon-btn" id="termMaxBtn" aria-pressed="' + (p.maximised ? 'true' : 'false') + '" title="' + (p.maximised ? 'Restore' : 'Maximise') + '" aria-label="' + (p.maximised ? 'Restore' : 'Maximise') + '">' +
           '<svg class="icon"><use href="#i-' + (p.maximised ? 'minimize' : 'maximize') + '"/></svg></button>' +
       '</div></div>' +
+    '<button type="button" class="icon-btn term-restore" id="termRestoreBtn" title="Restore" aria-label="Restore">' +
+      '<svg class="icon icon-sm"><use href="#i-minimize"/></svg></button>' +
     '<div class="term-strip" id="termStrip">' + stripInnerHtml(pid) + '</div>' +
-    '<div class="term-host" id="termHost" data-pid="' + esc(pid) + '"></div>' +
+    '<div class="term-body">' +
+      '<div class="term-host" id="termHost" data-pid="' + esc(pid) + '"></div>' +
+      // Scrollback controls, always on screen: a tablet has no wheel, so
+      // without these there is no way to look back at what a shell printed.
+      '<div class="term-scroll">' +
+        '<button type="button" class="term-scroll__btn" id="termScrollUpBtn" title="Scroll up" aria-label="Scroll up">' +
+          '<svg class="icon icon-sm"><use href="#i-arrow-up"/></svg></button>' +
+        '<button type="button" class="term-scroll__btn" id="termScrollDownBtn" title="Scroll down" aria-label="Scroll down">' +
+          '<svg class="icon icon-sm"><use href="#i-arrow-down"/></svg></button>' +
+      '</div>' +
+    '</div>' +
     '<div class="term-status" id="termPaneStatus" hidden></div>' +
   '</div>';
 }
@@ -481,18 +493,101 @@ function wireControls(pid) {
     }, function () { restartBtn.disabled = false; });
   });
 
-  if (maxBtn) maxBtn.addEventListener('click', function () {
+  // Maximised hides the card head, so the head's own button can only ever turn
+  // it on; #termRestoreBtn floats over the tab strip and is what turns it off.
+  function setMaximised(on) {
     var p = proj(pid);
-    p.maximised = !p.maximised;
+    p.maximised = on;
     var card = document.getElementById('termCard');
-    if (card) card.classList.toggle('is-max', p.maximised);
-    maxBtn.setAttribute('aria-pressed', p.maximised ? 'true' : 'false');
-    maxBtn.setAttribute('title', p.maximised ? 'Restore' : 'Maximise');
-    maxBtn.setAttribute('aria-label', p.maximised ? 'Restore' : 'Maximise');
-    var use = maxBtn.querySelector('use');
-    if (use) use.setAttribute('href', '#i-' + (p.maximised ? 'minimize' : 'maximize'));
+    if (card) card.classList.toggle('is-max', on);
+    if (maxBtn) {
+      maxBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      maxBtn.setAttribute('title', on ? 'Restore' : 'Maximise');
+      maxBtn.setAttribute('aria-label', on ? 'Restore' : 'Maximise');
+      var use = maxBtn.querySelector('use');
+      if (use) use.setAttribute('href', '#i-' + (on ? 'minimize' : 'maximize'));
+    }
     // The pane changed size; refit after the layout settles.
     var pane = p.active ? panes[p.active] : null;
     if (pane && pane.fit) requestAnimationFrame(function () { if (pane.container.isConnected) pane.fit.fit(); });
+  }
+
+  if (maxBtn) maxBtn.addEventListener('click', function () { setMaximised(!proj(pid).maximised); });
+  var restoreBtn = document.getElementById('termRestoreBtn');
+  if (restoreBtn) restoreBtn.addEventListener('click', function () { setMaximised(false); });
+
+  wireScroll(pid);
+}
+
+/* The scroll up / down buttons. A tap moves SCROLL_LINES lines; holding one
+   down keeps scrolling, so walking back through a long build log does not mean
+   tapping fifty times. Pointer events cover mouse, pen and touch alike. */
+var SCROLL_LINES = 4;
+var SCROLL_HOLD_DELAY = 350;
+var SCROLL_HOLD_EVERY = 70;
+
+/** One rendered row's height, for turning a line count into a wheel delta. */
+function rowHeight(pane) {
+  var row = pane.container.querySelector('.xterm-rows > div');
+  var h = row ? row.getBoundingClientRect().height : 0;
+  return h > 0 ? h : 17;
+}
+
+function wireScroll(pid) {
+  bindScrollBtn(pid, document.getElementById('termScrollUpBtn'), -SCROLL_LINES);
+  bindScrollBtn(pid, document.getElementById('termScrollDownBtn'), SCROLL_LINES);
+}
+
+function bindScrollBtn(pid, btn, lines) {
+  if (!btn) return;
+  var holdTimer = null;
+  var repeatTimer = null;
+
+  /* Imitate the mouse wheel, always - never scroll xterm's viewport directly.
+     Whether the scrollback belongs to xterm or to the program depends on what
+     is running: a bare shell leaves it to xterm, while claude keeps the screen
+     on the normal buffer, turns on mouse tracking and scrolls its own
+     transcript, and a pager like less takes the alternate buffer. term.scrollLines
+     only ever moves xterm's own viewport, so under claude it moved nothing and
+     the button looked dead. A wheel event is the one input every one of those
+     cases already understands, because it is what a real mouse sends. */
+  function step() {
+    var p = proj(pid);
+    var pane = p.active ? panes[p.active] : null;
+    if (!pane || !pane.term) return;
+    var screen = pane.container.querySelector('.xterm-screen');
+    if (!screen) return;
+
+    var box = screen.getBoundingClientRect();
+    // Measured against a real pager: one event moves the program at most one
+    // line however big deltaY is, and anything under about four row heights
+    // does not register as a notch at all. So the distance comes from the
+    // number of events, and each one carries a full notch.
+    var notch = Math.max(60, rowHeight(pane) * 4) * (lines < 0 ? -1 : 1);
+    for (var i = Math.abs(lines); i > 0; i--) {
+      screen.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: notch,
+        deltaMode: 0, // pixels - the only mode xterm reads reliably here
+        bubbles: true,
+        cancelable: true,
+        clientX: box.left + box.width / 2,
+        clientY: box.top + box.height / 2,
+      }));
+    }
+  }
+
+  function stop() {
+    clearTimeout(holdTimer); holdTimer = null;
+    clearInterval(repeatTimer); repeatTimer = null;
+  }
+
+  btn.addEventListener('pointerdown', function (e) {
+    e.preventDefault(); // keep the terminal's focus and stop touch from scrolling the page
+    step();
+    stop();
+    holdTimer = setTimeout(function () { repeatTimer = setInterval(step, SCROLL_HOLD_EVERY); }, SCROLL_HOLD_DELAY);
   });
+  btn.addEventListener('pointerup', stop);
+  btn.addEventListener('pointercancel', stop);
+  btn.addEventListener('pointerleave', stop);
 }

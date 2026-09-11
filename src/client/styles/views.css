@@ -95,7 +95,24 @@
 .term-status.is-error { color: var(--danger-fg); font-family: var(--font-mono); white-space: pre-wrap; }
 /* The Terminal tab. The screen is dark in both themes - xterm paints its own
    colours (TERM_THEME in terminal-pane.mjs), the host just matches them. */
-.term-host { padding: var(--s-3); background: #0e0f17; }
+.term-body { position: relative; display: flex; flex-direction: column; min-height: 0; }
+.term-body > .term-host { flex: 1 1 auto; min-height: 0; }
+/* The left padding is a gutter for the scroll buttons below, so they never sit
+   on top of a line of output. */
+.term-host { padding: var(--s-3) var(--s-3) var(--s-3) 52px; background: #0e0f17; }
+
+/* Scroll up / down. Always on screen, over the left edge of the terminal: a
+   tablet has no wheel, so these are the only way to reach the scrollback
+   there. They sit on the terminal's own dark ground, so their colours are
+   fixed rather than themed. */
+.term-scroll { position: absolute; left: var(--s-2); top: 50%; transform: translateY(-50%); z-index: 3; display: flex; flex-direction: column; gap: var(--s-2); }
+.term-scroll__btn {
+  width: 34px; height: 34px; flex: none; display: grid; place-items: center;
+  border-radius: var(--r-md); cursor: pointer; touch-action: none;
+  color: #d6d9e4; background: #1c1e2e; border: 1px solid rgba(214, 217, 228, .2);
+}
+.term-scroll__btn:hover { background: #34374e; color: #fff; }
+.term-scroll__btn:active { background: rgba(98, 88, 239, .5); }
 .term-screen { height: 60vh; min-height: 320px; }
 
 /* The Terminal 1 | Terminal 2 | + strip. */
@@ -119,10 +136,25 @@
 /* Inline rename box, shown while a tab label is being edited. */
 .term-tab__rename { width: 96px; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg); background: var(--surface); border: 1px solid var(--accent-400); border-radius: var(--r-sm); padding: 1px 4px; outline: none; }
 
-/* Maximise: the card breaks out to fill the viewport. */
-.term-card.is-max { position: fixed; inset: var(--s-3); z-index: 60; margin: 0; box-shadow: var(--shadow-xl); display: flex; flex-direction: column; }
-.term-card.is-max .term-host { flex: 1 1 auto; }
+.term-card { position: relative; }
+
+/* Maximise: the card breaks out to fill the whole viewport, edge to edge. The
+   card head - title, description, Restart, Maximise - is hidden, so the only
+   chrome left above the screen is the tab strip; the floating Restore button
+   below is what brings the page back. */
+.term-card.is-max { position: fixed; inset: 0; z-index: 60; margin: 0; border: none; border-radius: 0; box-shadow: none; display: flex; flex-direction: column; }
+.term-card.is-max .card__head { display: none; }
+.term-card.is-max .term-strip { border-top: none; padding-right: 48px; }
+.term-card.is-max .term-body { flex: 1 1 auto; min-height: 0; }
 .term-card.is-max .term-screen { height: 100%; }
+
+/* Restore, only while maximised: sits over the top right of the tab strip,
+   which reserves the room for it with the padding-right above. */
+.term-restore { display: none; }
+.term-card.is-max .term-restore {
+  display: grid; position: absolute; top: var(--s-1); right: var(--s-2); z-index: 2;
+  width: 32px; height: 32px; background: var(--surface-2); border-color: var(--border);
+}
 
 /* Processes dialog rows. */
 .proc-list { display: flex; flex-direction: column; gap: var(--s-2); }
@@ -145,7 +177,22 @@
 .wf-step { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: var(--s-3) var(--s-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); flex: 0 1 auto; min-width: 120px; text-align: center; }
 .wf-step__name { font-family: var(--font-mono); font-size: var(--fs-sm); }
 .wf-step__reason { font-size: var(--fs-xs); color: var(--fg-muted); max-width: 220px; }
-.wf-step__time { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-muted); max-width: 220px; overflow-wrap: anywhere; }
+.wf-step__status { display: flex; align-items: center; gap: 6px; }
+.wf-step__took { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-muted); }
+/* Start -> end stamps: shown by clicking the step, hidden by clicking anywhere else. */
+.wf-step.has-tip { position: relative; cursor: pointer; }
+.wf-step__tip {
+  display: none; position: absolute; top: calc(100% + 6px); left: 50%; z-index: 20;
+  transform: translateX(calc(-50% + var(--tip-shift, 0px)));
+  width: max-content; max-width: 260px; padding: 6px var(--s-2); border-radius: var(--r-sm);
+  background: var(--fg); color: var(--surface); font-family: var(--font-mono); font-size: var(--fs-xs); text-align: center;
+}
+.wf-step.is-tip-open .wf-step__tip { display: block; }
+.wf-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: none; background: none; color: var(--fg-muted); font-size: var(--fs-xs); cursor: pointer; }
+.wf-toggle:hover { color: var(--fg); }
+.wf-toggle .icon { transition: transform var(--t-fast); }
+.wf-toggle[aria-expanded="false"] .icon { transform: rotate(-90deg); }
+#detailWorkflow { margin-top: var(--s-2); }
 /* While a Verified run's window is open: the human-verification box carries a spinner. */
 .wf-step.is-busy { border-color: var(--accent-400); }
 .wf-step__busy { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--fg-muted); }
@@ -251,6 +298,28 @@
   box-shadow: var(--shadow-sm); padding: var(--s-2) var(--s-3);
 }
 .convtools__bar { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+
+/* ---------- Conversation, full screen ----------
+   Reading mode: the transcript and the token/find strip, nothing else. The
+   composer is hidden with the rest - this mode is not for typing. The page
+   still scrolls the window, so auto-follow, the scroll-jump button and the
+   sticky strip all keep working untouched.
+   These are body-scoped, so they also beat the 700px rule below that unsticks
+   .convtools - that rule exists because the topbar wraps to two rows there, and
+   here there is no topbar at all. */
+body.is-conv-max .topbar,
+body.is-conv-max .page-head,
+body.is-conv-max .conv-list,
+body.is-conv-max .composer { display: none; }
+body.is-conv-max .content { padding: var(--s-2) var(--s-3) var(--s-5); max-width: none; }
+body.is-conv-max .conv-layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
+/* Pinned to the top of the viewport, with room kept clear for Restore. */
+body.is-conv-max .convtools { position: sticky; top: var(--s-2); padding-right: 48px; }
+.conv-restore {
+  position: fixed; top: var(--s-3); right: var(--s-3); z-index: 40;
+  width: 32px; height: 32px;
+  background: var(--surface-2); border-color: var(--border); box-shadow: var(--shadow-md);
+}
 .tok__head {
   flex: 1 1 180px; min-width: 0; display: flex; align-items: center; gap: var(--s-2);
   background: none; border: none; padding: var(--s-1) 0; color: inherit; text-align: left;

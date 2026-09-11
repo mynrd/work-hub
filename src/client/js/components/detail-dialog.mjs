@@ -15,22 +15,21 @@ const FULLSCREEN_KEY = 'work-hub-modal-fullscreen';
 
 // ---- Panel renderers --------------------------------------------------------
 
-// `Aug 30, 14:02 → Aug 30, 17:45 (3h 43m)` under a step's badge; only one
-// half when only one stamp exists; nothing at all for a step with neither.
-function stepTime(step) {
+// `(3h 43m)` next to a step's badge; nothing unless both stamps exist.
+function stepTook(step) {
+  var took = elapsed(step.startedAt, step.endedAt);
+  return took ? '<span class="wf-step__took">(' + took + ')</span>' : '';
+}
+
+// `Aug 30, 14:02 → Aug 30, 17:45` for the step's click tooltip; only one half
+// when only one stamp exists; '' for a step with neither.
+function stepRange(step) {
   var from = stamp(step.startedAt);
   var to = stamp(step.endedAt);
-  if (!from && !to) return '';
-  var text;
-  if (from && to) {
-    var took = elapsed(step.startedAt, step.endedAt);
-    text = from + ' &#8594; ' + to + (took ? ' (' + took + ')' : '');
-  } else if (from) {
-    text = 'started ' + from;
-  } else {
-    text = 'ended ' + to;
-  }
-  return '<div class="wf-step__time">' + text + '</div>';
+  if (from && to) return from + ' &#8594; ' + to;
+  if (from) return 'started ' + from;
+  if (to) return 'ended ' + to;
+  return '';
 }
 
 function renderWorkflow(progress) {
@@ -40,8 +39,10 @@ function renderWorkflow(progress) {
     var isObj = step && typeof step === 'object';
     var name = isObj ? step.step : step;
     var reason = isObj && step.reason ? '<div class="wf-step__reason">' + esc(step.reason) + '</div>' : '';
-    return '<div class="wf-step"><div class="wf-step__name">' + esc(name === null || name === undefined ? '(unnamed)' : name) + '</div>' +
-      badge(isObj ? step.status : undefined, WORKFLOW_COLORS) + (isObj ? stepTime(step) : '') + reason + '</div>';
+    var range = isObj ? stepRange(step) : '';
+    var tip = range ? '<div class="wf-step__tip" role="tooltip">' + range + '</div>' : '';
+    return '<div class="wf-step' + (range ? ' has-tip' : '') + '"><div class="wf-step__name">' + esc(name === null || name === undefined ? '(unnamed)' : name) + '</div>' +
+      '<div class="wf-step__status">' + badge(isObj ? step.status : undefined, WORKFLOW_COLORS) + (isObj ? stepTook(step) : '') + '</div>' + reason + tip + '</div>';
   }).join('<div class="wf-arrow">&#8594;</div>') + '</div>';
 }
 
@@ -263,6 +264,58 @@ function applyReading(on) {
 }
 
 mdReadBtn.addEventListener('click', function () { applyReading(!modalEl.classList.contains('is-reading')); });
+
+// ---- Workflow track -----------------------------------------------------------
+// The track collapses under its label (persisted, like FULLSCREEN_KEY). Each
+// step with a stamp opens a start -> end tooltip on click; a click anywhere
+// else closes it.
+
+const WORKFLOW_COLLAPSED_KEY = 'work-hub-workflow-collapsed';
+const workflowEl = document.getElementById('detailWorkflow');
+const workflowToggle = document.getElementById('detailWorkflowToggle');
+
+function applyWorkflowCollapsed(on) {
+  workflowEl.hidden = on;
+  workflowToggle.setAttribute('aria-expanded', on ? 'false' : 'true');
+  try { localStorage.setItem(WORKFLOW_COLLAPSED_KEY, on ? '1' : '0'); } catch (e) { /* storage blocked */ }
+}
+
+(function initWorkflowCollapsed() {
+  var stored = false;
+  try { stored = localStorage.getItem(WORKFLOW_COLLAPSED_KEY) === '1'; } catch (e) { /* default expanded */ }
+  applyWorkflowCollapsed(stored);
+})();
+workflowToggle.addEventListener('click', function () { applyWorkflowCollapsed(!workflowEl.hidden); });
+
+function closeStepTip() {
+  var open = workflowEl.querySelector('.wf-step.is-tip-open');
+  if (open) open.classList.remove('is-tip-open');
+}
+
+// Centred under the step, then nudged sideways so it never runs past the
+// dialog's edge (the modal clips overflow).
+function openStepTip(step) {
+  var tip = step.querySelector('.wf-step__tip');
+  step.classList.add('is-tip-open');
+  tip.style.setProperty('--tip-shift', '0px');
+  var box = modalEl.getBoundingClientRect();
+  var r = tip.getBoundingClientRect();
+  var shift = 0;
+  if (r.left < box.left + 8) shift = box.left + 8 - r.left;
+  else if (r.right > box.right - 8) shift = box.right - 8 - r.right;
+  tip.style.setProperty('--tip-shift', shift + 'px');
+}
+
+workflowEl.addEventListener('click', function (e) {
+  var step = e.target.closest('.wf-step.has-tip');
+  if (!step) return;
+  var wasOpen = step.classList.contains('is-tip-open');
+  closeStepTip();
+  if (!wasOpen) openStepTip(step);
+});
+document.addEventListener('click', function (e) {
+  if (!e.target.closest('#detailWorkflow .wf-step.has-tip')) closeStepTip();
+});
 
 // ---- Open / close -----------------------------------------------------------
 
