@@ -265,6 +265,17 @@ function createPane(projectId, shellId, serverRunning) {
       return true;
     });
     pane.term.open(pane.container);
+    // Right-click with a selection copies it, as Windows Terminal does. xterm
+    // only primes its hidden textarea for the context menu's Copy entry.
+    // execCommand rather than navigator.clipboard: the latter is undefined on
+    // a plain-http LAN address. Without a selection the native menu stays, so
+    // its Paste entry keeps working (programmatic paste would need https).
+    pane.container.addEventListener('contextmenu', function (e) {
+      if (!pane.term || !pane.term.hasSelection()) return;
+      e.preventDefault();
+      document.execCommand('copy');
+      pane.term.clearSelection();
+    });
     if (pane.container.isConnected) pane.fit.fit();
     pane.term.onData(function (data) { queueInput(pane, data); });
     pane.term.onResize(function () { postResize(pane); });
