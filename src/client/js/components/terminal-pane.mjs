@@ -253,6 +253,17 @@ function createPane(projectId, shellId, serverRunning) {
     });
     pane.fit = new FitAddon();
     pane.term.loadAddon(pane.fit);
+    // xterm turns Ctrl+V into the byte 0x16 and cancels the keydown, so the
+    // browser's paste event never fires and the byte reaches PSReadLine, which
+    // then pastes the *server* machine's clipboard. Same for Ctrl+C with a
+    // selection (0x03, nothing copied). Returning false hands both keys back
+    // to the browser; xterm's own copy/paste event handlers do the rest.
+    pane.term.attachCustomKeyEventHandler(function (e) {
+      if (e.type !== 'keydown' || !e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return true;
+      if (e.key === 'v') return false;
+      if (e.key === 'c' && pane.term.hasSelection()) return false;
+      return true;
+    });
     pane.term.open(pane.container);
     if (pane.container.isConnected) pane.fit.fit();
     pane.term.onData(function (data) { queueInput(pane, data); });
