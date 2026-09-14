@@ -104,7 +104,10 @@ function renderSettings() {
         (c.projects.length === 0 ? emptyState('No folders yet', 'Add the absolute path of a repo or working folder.') :
           '<div class="table-wrap"><table class="table table--stack"><thead><tr><th>Path</th><th style="width:110px"></th></tr></thead><tbody>' +
           c.projects.map(function (p) {
-            return '<tr><td class="cell-mono" data-label="Path">' + esc(p) + '</td><td><button type="button" class="btn btn-danger btn-sm" data-remove="' + esc(p) + '">Remove</button></td></tr>';
+            var missing = (c.missingProjects || []).indexOf(p) !== -1;
+            return '<tr><td class="cell-mono" data-label="Path">' + esc(p) +
+              (missing ? ' <span class="badge badge-danger">folder is missing</span>' : '') +
+              '</td><td><button type="button" class="btn btn-danger btn-sm" data-remove="' + esc(p) + '">Remove</button></td></tr>';
           }).join('') + '</tbody></table></div>') +
       '</div></div>' +
     '<div class="card"><div class="card__head"><div><h3>Composer defaults</h3><p>Pre-selected in every reply composer. Each conversation can still override them.</p></div></div>' +

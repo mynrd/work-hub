@@ -560,6 +560,21 @@ test('AC 2: PUT /api/config persists an added path and GET returns it', async ()
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('GET /api/config flags a saved folder that has since been deleted', async () => {
+  const home = tempHome();
+  const gone = fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-gone-'));
+  await withServer({ home }, async (get) => {
+    await get('/api/config', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projects: [PROJ_A, gone] }),
+    });
+    fs.rmSync(gone, { recursive: true, force: true });
+    const body = await (await get('/api/config')).json();
+    assert.deepEqual(body.missingProjects, [path.resolve(gone)]);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('AC 2: PUT /api/config rejects a non-existent path with the reason and saves nothing', async () => {
   const home = tempHome();
   await withServer({ home }, async (get) => {

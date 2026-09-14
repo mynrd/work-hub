@@ -399,6 +399,12 @@ export function createServer({
   let config = loadConfig(...homeArgs);
   usage.setIntervalMinutes(config.usageIntervalMinutes);
 
+  /** A configured folder that is gone (deleted, unmounted, renamed). */
+  function isMissingDir(dirPath) {
+    try { return !fs.statSync(dirPath).isDirectory(); }
+    catch { return true; }
+  }
+
   /**
    * The dashboard model: the configured folders and nothing else.
    *
@@ -412,13 +418,8 @@ export function createServer({
   function buildDashboard() {
     const favorites = new Set((config.favorites ?? []).map((p) => p.toLowerCase()));
     const projects = config.projects.map((projectPath) => {
-      let missing = false;
+      const missing = isMissingDir(projectPath);
       let hasWorkDir = false;
-      try {
-        missing = !fs.statSync(projectPath).isDirectory();
-      } catch {
-        missing = true;
-      }
       if (!missing) {
         try { hasWorkDir = fs.statSync(path.join(projectPath, '.work')).isDirectory(); }
         catch { hasWorkDir = false; }
@@ -914,7 +915,10 @@ export function createServer({
         // Leaving it out would render a select with nothing selected, so the page
         // would show `opus` while the server still ran the pinned one.
         const models = MODELS.includes(config.defaults.model) ? MODELS : [config.defaults.model, ...MODELS];
-        sendJson(res, 200, { ...config, configPath: configPath(...homeArgs), models, efforts: EFFORTS, permissionModes: PERMISSION_MODES });
+        // Settings lists the raw paths, so it needs the same existence check the
+        // dashboard does to tag a folder that is no longer there.
+        const missingProjects = config.projects.filter(isMissingDir);
+        sendJson(res, 200, { ...config, configPath: configPath(...homeArgs), models, efforts: EFFORTS, permissionModes: PERMISSION_MODES, missingProjects });
         return;
       }
       if (req.method === 'PUT') { handleConfigPut(req, res); return; }
