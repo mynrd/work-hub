@@ -480,9 +480,18 @@ export function createServer({
     }
 
     const incoming = Array.isArray(body?.projects) ? body.projects : [];
+    // Only a path that is not already monitored has to exist. A folder deleted
+    // after it was added must stay saveable, or Remove - the one way out of the
+    // list - would be blocked by exactly the state it exists for, and every
+    // other save on this page (add, rename, composer defaults) would 400 too.
+    const known = new Set(config.projects.map((p) => p.toLowerCase()));
     const accepted = [];
     const rejected = [];
     for (const candidate of incoming) {
+      const resolved = typeof candidate === 'string' && candidate.trim()
+        ? path.resolve(candidate.trim())
+        : null;
+      if (resolved && known.has(resolved.toLowerCase())) { accepted.push(resolved); continue; }
       const check = validateProjectPath(candidate);
       if (check.ok) accepted.push(check.path);
       else rejected.push({ path: String(candidate ?? ''), error: check.error });

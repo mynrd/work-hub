@@ -560,6 +560,41 @@ test('AC 2: PUT /api/config persists an added path and GET returns it', async ()
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('AC 2: a saved folder that has been deleted can still be removed, and does not block other saves', async () => {
+  const home = tempHome();
+  const goneA = fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-gone-'));
+  const goneB = fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-gone-'));
+  await withServer({ home }, async (get) => {
+    const put = (projects) => get('/api/config', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projects }),
+    });
+    await put([PROJ_A, goneA, goneB]);
+    fs.rmSync(goneA, { recursive: true, force: true });
+    fs.rmSync(goneB, { recursive: true, force: true });
+
+    // Removing one missing folder while another is still missing.
+    const dropped = await put([PROJ_A, goneB]);
+    assert.equal(dropped.status, 200);
+    assert.deepEqual((await dropped.json()).projects, [path.resolve(PROJ_A), path.resolve(goneB)]);
+
+    // An unrelated save with the missing folder left in place.
+    const kept = await get('/api/config', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projects: [PROJ_A, goneB], usageIntervalMinutes: 45 }),
+    });
+    assert.equal(kept.status, 200);
+    assert.equal((await kept.json()).usageIntervalMinutes, 45);
+
+    // A path that was never monitored is still rejected.
+    const bogus = await put([PROJ_A, goneB, path.join(FIXTURES, 'nowhere-at-all')]);
+    assert.equal(bogus.status, 400);
+    assert.match((await bogus.json()).error, /does not exist/);
+    assert.deepEqual(loadConfig(home).projects, [path.resolve(PROJ_A), path.resolve(goneB)]);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('GET /api/config flags a saved folder that has since been deleted', async () => {
   const home = tempHome();
   const gone = fs.mkdtempSync(path.join(os.tmpdir(), 'work-hub-gone-'));
