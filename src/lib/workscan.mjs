@@ -134,6 +134,39 @@ export function listMarkdownFiles(folderPath) {
   return mdFiles;
 }
 
+/**
+ * Everything else directly inside a job folder, for the Files tab: `{ name,
+ * ext, size }` sorted by name. `progress.json` and `.md` are left out because
+ * the Raw and Docs tabs already own them. A file whose stat fails is still
+ * listed, with `size: null`. Never throws, like listMarkdownFiles.
+ */
+export function listJobFiles(folderPath) {
+  let entries;
+  try {
+    entries = fs.readdirSync(folderPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const files = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const lower = entry.name.toLowerCase();
+    if (lower === PROGRESS_FILE || lower.endsWith('.md')) continue;
+
+    let size = null;
+    try {
+      size = fs.statSync(path.join(folderPath, entry.name)).size;
+    } catch {
+      // momentarily locked - listed without a size rather than dropped
+    }
+    files.push({ name: entry.name, ext: path.extname(entry.name).toLowerCase(), size });
+  }
+
+  files.sort((a, b) => a.name.localeCompare(b.name));
+  return files;
+}
+
 function buildJob(folder, folderPath, parsed, { now, windowMs }) {
   const workflow = Array.isArray(parsed.workflow) ? parsed.workflow : [];
   const { acPass, acTotal, acImplemented } = computeAcCounts(parsed.acceptanceCriteria);
@@ -163,6 +196,7 @@ function buildJob(folder, folderPath, parsed, { now, windowMs }) {
     activeReason,
     active: sessionActive || mtimeActive,
     mdFiles: listMarkdownFiles(folderPath),
+    files: listJobFiles(folderPath),
     progress: parsed,
   };
 }

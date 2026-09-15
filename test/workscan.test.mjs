@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { scanWorkFolder, groupFor, computeAcCounts, computeCurrentStep, localDay, listMarkdownFiles } from '../src/lib/workscan.mjs';
+import { scanWorkFolder, groupFor, computeAcCounts, computeCurrentStep, localDay, listMarkdownFiles, listJobFiles } from '../src/lib/workscan.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(__dirname, 'fixtures');
@@ -207,4 +207,26 @@ test('localDay compares by local calendar day, not by UTC', () => {
 test('markdown files list PLAN.md first', () => {
   const files = listMarkdownFiles(path.join(PROJ_A, '.work', '2026-08-29-worked-today'));
   assert.deepEqual(files, ['PLAN.md', 'NOTES.md']);
+});
+
+test('the file list leaves out progress.json and .md, and carries ext and size', () => {
+  const files = listJobFiles(path.join(PROJ_A, '.work', '2026-08-29-worked-today'));
+  assert.deepEqual(files.map((f) => f.name), ['data.csv', 'notes.txt', 'report.html', 'script.ps1']);
+  assert.deepEqual(files.map((f) => f.ext), ['.csv', '.txt', '.html', '.ps1']);
+  // Sizes are real byte counts, not placeholders.
+  assert.equal(files.find((f) => f.name === 'notes.txt').size, fs.statSync(path.join(PROJ_A, '.work', '2026-08-29-worked-today', 'notes.txt')).size);
+});
+
+test('a job folder with nothing but progress.json has an empty file list', () => {
+  assert.deepEqual(listJobFiles(path.join(PROJ_A, '.work', '2020-02-02-others')), []);
+});
+
+test('a folder that is not there lists no files rather than throwing', () => {
+  assert.deepEqual(listJobFiles(path.join(PROJ_A, '.work', 'no-such-folder')), []);
+});
+
+test('scanned jobs carry their file list', () => {
+  const model = scanWorkFolder(PROJ_A, { now: NOW });
+  const job = model.today.find((j) => j.folder === '2026-08-29-worked-today');
+  assert.deepEqual(job.files.map((f) => f.name), ['data.csv', 'notes.txt', 'report.html', 'script.ps1']);
 });

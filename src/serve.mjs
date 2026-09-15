@@ -274,6 +274,71 @@ function handleMarkdownRoute(res, projectPath, rawFolder, rawFile) {
   sendText(res, 200, html, 'text/html; charset=utf-8');
 }
 
+// What the Files tab is allowed to fetch out of a job folder. An extension not
+// in here is never served, whatever the file actually holds - so a stray `.ps1`
+// or `.exe` beside a PLAN.md stays unreachable. `.md` is absent on purpose: it
+// has the route above, which renders instead of serving.
+const JOB_FILE_TYPES = {
+  '.txt': 'text/plain; charset=utf-8',
+  '.log': 'text/plain; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.pdf': 'application/pdf',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+};
+
+/**
+ * Serves one file from a job folder as-is, for the Files tab. Same containment
+ * guard as the markdown route - the resolved path must stay under that
+ * project's `.work/` - plus the extension allowlist above.
+ */
+function handleJobFileRoute(res, projectPath, rawFolder, rawFile) {
+  const folder = decodeSegment(rawFolder);
+  const file = decodeSegment(rawFile);
+  if (!folder || !file) {
+    sendJson(res, 400, { error: 'Invalid folder or file segment' });
+    return;
+  }
+
+  const ext = path.extname(file).toLowerCase();
+  const type = Object.prototype.hasOwnProperty.call(JOB_FILE_TYPES, ext) ? JOB_FILE_TYPES[ext] : null;
+  if (!type) {
+    sendJson(res, 400, { error: `${ext || file} files are not served from a job folder` });
+    return;
+  }
+
+  const workRoot = path.resolve(projectPath, '.work');
+  const filePath = path.resolve(workRoot, folder, file);
+  if (!filePath.startsWith(workRoot + path.sep)) {
+    sendJson(res, 400, { error: 'Resolved path escapes the .work root' });
+    return;
+  }
+
+  let body;
+  try {
+    body = fs.readFileSync(filePath);
+  } catch (err) {
+    sendJson(res, 404, { error: `Cannot read ${folder}/${file}: ${err.code ?? err.message}` });
+    return;
+  }
+
+  // The extension is the only thing that picked the Content-Type, so nosniff:
+  // a `.txt` full of HTML must not be re-read as a page by the browser.
+  res.writeHead(200, {
+    'Content-Type': type,
+    'Content-Length': body.length,
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.end(body);
+}
+
 // ── Git inspection routes ────────────────────────────────────────────────────
 
 const GIT_SHA_RE = /^[0-9a-f]{7,40}$/i;
@@ -1080,6 +1145,12 @@ export function createServer({
       // /api/projects/:pid/jobs/:folder/md/:file
       if (parts[1] === 'jobs' && parts[3] === 'md' && parts.length === 5 && req.method === 'GET') {
         handleMarkdownRoute(res, projectPath, parts[2], parts[4]);
+        return;
+      }
+
+      // /api/projects/:pid/jobs/:folder/file/:name - the Files tab's raw bytes
+      if (parts[1] === 'jobs' && parts[3] === 'file' && parts.length === 5 && req.method === 'GET') {
+        handleJobFileRoute(res, projectPath, parts[2], parts[4]);
         return;
       }
 

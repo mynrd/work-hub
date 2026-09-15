@@ -71,6 +71,20 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-base);
 .modal.is-reading .modal__fixed,
 .modal.is-reading .tabs { display: none; }
 .modal--sm { max-width: 520px; }
+/* The text viewer opens over the job dialog, so it needs to sit above it. */
+.overlay--top { z-index: 130; }
+/* The text viewer opens large rather than sized to its content: a 40 line file
+   and a 4000 line one get the same window, and the maximise button takes it
+   the rest of the way. */
+.modal--text { max-width: 1280px; height: calc(100dvh - var(--s-5) * 2); }
+.modal--text.is-fullscreen { height: calc(100dvh - var(--s-3) * 2); }
+.text-view {
+  flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0; padding: var(--s-4);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md);
+  font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.6;
+  white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg);
+}
+.file-error { font-size: var(--fs-sm); color: var(--danger-fg); margin-bottom: var(--s-3); }
 .modal__head { flex: 0 0 auto; display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-3); padding: var(--s-5) var(--s-5) var(--s-4); border-bottom: 1px solid var(--border); }
 .modal__head h3 { font-size: var(--fs-lg); display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
 .modal__head p { font-size: var(--fs-sm); color: var(--fg-muted); margin-top: var(--s-2); }
@@ -122,7 +136,6 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-base);
 .tab.is-active { color: var(--accent-600); }
 .tab.is-active::after { content: ""; position: absolute; left: var(--s-4); right: var(--s-4); bottom: -1px; height: 2px; background: var(--accent-500); border-radius: 2px; }
 [data-theme="dark"] .tab.is-active { color: var(--accent-400); }
-.tab.is-empty:not(.is-active) { opacity: .6; }
 .tabpanel { min-width: 0; }
 
 /* ---------- Chips ---------- */

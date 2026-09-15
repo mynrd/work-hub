@@ -859,6 +859,35 @@ test('AC 15: the markdown route serves .md from the job folder only', async () =
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('the file route serves an allowlisted extension from the job folder only', async () => {
+  const home = tempHome();
+  saveConfig({ projects: [PROJ_A] }, home);
+  const pid = encodeProjectId(path.resolve(PROJ_A));
+  await withServer({ home }, async (get) => {
+    const txt = await get(`/api/projects/${pid}/jobs/2026-08-29-worked-today/file/notes.txt`);
+    assert.equal(txt.status, 200);
+    assert.equal(txt.headers.get('content-type'), 'text/plain; charset=utf-8');
+    // The extension is what picked the type, so the browser must not re-sniff it.
+    assert.equal(txt.headers.get('x-content-type-options'), 'nosniff');
+    assert.match(await txt.text(), /line two/);
+
+    const html = await get(`/api/projects/${pid}/jobs/2026-08-29-worked-today/file/report.html`);
+    assert.equal(html.status, 200);
+    assert.equal(html.headers.get('content-type'), 'text/html; charset=utf-8');
+
+    // Off the allowlist, however real the file is
+    assert.equal((await get(`/api/projects/${pid}/jobs/2026-08-29-worked-today/file/script.ps1`)).status, 400);
+    // .md keeps its own route rather than being served raw
+    assert.equal((await get(`/api/projects/${pid}/jobs/2026-08-29-worked-today/file/PLAN.md`)).status, 400);
+    // Separator surviving decode, in either segment
+    assert.equal((await get(`/api/projects/${pid}/jobs/..%2f..%2f..%2fserve.mjs/file/notes.txt`)).status, 400);
+    assert.equal((await get(`/api/projects/${pid}/jobs/2026-08-29-worked-today/file/..%5c..%5cpackage.json`)).status, 400);
+    // On the allowlist but not there
+    assert.equal((await get(`/api/projects/${pid}/jobs/2026-08-29-worked-today/file/nope.txt`)).status, 404);
+  });
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('a run id that does not exist is 404', async () => {
   const home = tempHome();
   await withServer({ home }, async (get) => {

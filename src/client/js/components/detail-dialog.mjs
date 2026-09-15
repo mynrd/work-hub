@@ -1,4 +1,4 @@
-// The job detail dialog: one progress.json rendered across seven tabs, plus
+// The job detail dialog: one progress.json rendered across eight tabs, plus
 // Resolve - the only action in Work Hub that writes into a monitored folder.
 //
 // The dialog shell is static markup in index.html; this module fills it.
@@ -7,9 +7,10 @@ import {
   esc, badge, relativeTime, acText, listLen, stamp, elapsed,
   AC_COLORS, CASE_COLORS, STATUS_COLORS, TASK_COLORS, TIER_COLORS, WORKFLOW_COLORS,
 } from '../dom.mjs';
-import { api } from '../api.mjs';
+import { api, apiStream } from '../api.mjs';
 import { loadJobs, findJob } from '../data.mjs';
 import { renderCurrentPage } from '../render.mjs';
+import { openTextFile } from './text-dialog.mjs';
 
 const FULLSCREEN_KEY = 'work-hub-modal-fullscreen';
 
@@ -160,22 +161,144 @@ function renderIntake(progress) {
     findingsCard + '</div>';
 }
 
+// ---- Files panel ------------------------------------------------------------
+// Everything in the job folder that is not progress.json or a .md - the server
+// lists it in `job.files`. Where a file opens is decided by its extension, and
+// only these two lists open at all; anything else is listed and left alone.
+
+const TEXT_EXTS = ['.txt', '.log', '.csv', '.json'];
+const TAB_EXTS = ['.html', '.htm', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
+
+function fileKind(ext) {
+  if (TEXT_EXTS.indexOf(ext) !== -1) return 'text';
+  if (TAB_EXTS.indexOf(ext) !== -1) return 'tab';
+  return null;
+}
+
+function fmtBytes(n) {
+  if (typeof n !== 'number' || !isFinite(n) || n < 0) return '—';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function renderFiles(job) {
+  var list = Array.isArray(job.files) ? job.files : [];
+  if (list.length === 0) return '<p class="muted">No files in this job folder.</p>';
+
+  var rows = list.map(function (f) {
+    if (!f || typeof f !== 'object') return '';
+    var kind = fileKind(f.ext);
+    var action = kind === 'text'
+      ? '<button type="button" class="btn btn-secondary btn-sm" data-file="' + esc(f.name) + '" data-kind="text">' +
+        '<svg class="icon icon-sm"><use href="#i-book"/></svg> View</button>'
+      : kind === 'tab'
+        ? '<button type="button" class="btn btn-secondary btn-sm" data-file="' + esc(f.name) + '" data-kind="tab">' +
+          '<svg class="icon icon-sm"><use href="#i-external"/></svg> Open</button>'
+        : '<span class="muted fs-sm">Not viewable</span>';
+    return '<tr><td data-label="File"><span class="cell-mono">' + esc(f.name) + '</span></td>' +
+      '<td data-label="Size">' + fmtBytes(f.size) + '</td>' +
+      '<td data-label="Open">' + action + '</td></tr>';
+  }).join('');
+
+  return '<div class="table-wrap"><table class="table table--stack"><thead><tr><th>File</th><th>Size</th><th>Open</th></tr></thead><tbody>' +
+    rows + '</tbody></table></div>';
+}
+
+function fileUrl(job, name) {
+  return '/api/projects/' + encodeURIComponent(job.projectId) + '/jobs/' + encodeURIComponent(job.folder) +
+    '/file/' + encodeURIComponent(name);
+}
+
+const filesErrorEl = document.getElementById('filesError');
+
+function showFilesError(message) {
+  filesErrorEl.textContent = message;
+  filesErrorEl.hidden = !message;
+}
+
+/**
+ * Opens an HTML or PDF file in a real browser tab.
+ *
+ * A tab navigating on its own carries no X-Hub-Token header, so a gated server
+ * would answer it with a 401 page. The bytes are fetched through the authed
+ * layer instead and the tab is pointed at a blob: URL of them. The tab has to
+ * be opened synchronously inside the click - after the fetch resolves the
+ * popup blocker treats window.open as unprompted and swallows it.
+ */
+function openFileInTab(job, name) {
+  var win = window.open('', '_blank');
+  showFilesError('');
+  apiStream(fileUrl(job, name))
+    .then(function (res) { return res.blob(); })
+    .then(function (blob) {
+      var url = URL.createObjectURL(blob);
+      if (win) win.location.replace(url);
+      else window.open(url, '_blank'); // blocker ate the first one; this one usually survives
+      // Revoked late on purpose: Chrome still needs the URL while the new tab
+      // loads it, and an immediate revoke shows an empty tab.
+      setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+    })
+    .catch(function (err) {
+      if (win) win.close();
+      showFilesError('Could not open ' + name + ': ' + err.message);
+    });
+}
+
+document.getElementById('detailFiles').addEventListener('click', function (e) {
+  var btn = e.target.closest('button[data-file]');
+  if (!btn || !currentJob) return;
+  var name = btn.getAttribute('data-file');
+  if (btn.getAttribute('data-kind') === 'tab') {
+    openFileInTab(currentJob, name);
+  } else {
+    showFilesError('');
+    openTextFile(fileUrl(currentJob, name), name, currentJob.folder);
+  }
+});
+
 // ---- Tabs -------------------------------------------------------------------
 
+// A tab with nothing behind it is not rendered at all - no button, no panel.
+// `has` decides that; where it is missing the tab always shows. Most tabs are
+// empty exactly when their count is 0, so `has` only appears on the two that
+// count nothing (Intake, Raw) and on Tests, where a tier can carry a command
+// and a status with no cases under it.
 const DETAIL_TABS = [
   { id: 'ac', label: 'Acceptance Criteria', count: function (job) { return listLen(job.progress && job.progress.acceptanceCriteria); } },
-  { id: 'intake', label: 'Intake' },
+  { id: 'intake', label: 'Intake', has: function (job) {
+      var intake = job.progress && job.progress.intake;
+      return Boolean(intake) && typeof intake === 'object' && Object.keys(intake).length > 0;
+    } },
   { id: 'tasks', label: 'Tasks', count: function (job) { return listLen(job.progress && job.progress.tasks); } },
-  { id: 'tests', label: 'Tests', count: function (job) {
+  { id: 'tests', label: 'Tests',
+    count: function (job) {
       var t = job.progress && job.progress.tests;
       var unit = t && t.unit && Array.isArray(t.unit.cases) ? t.unit.cases.length : 0;
       var ui = t && t.ui && Array.isArray(t.ui.cases) ? t.ui.cases.length : 0;
       return unit + ui;
+    },
+    has: function (job) {
+      var t = job.progress && job.progress.tests;
+      if (!t || typeof t !== 'object') return false;
+      return Boolean(t.unit && typeof t.unit === 'object') || Boolean(t.ui && typeof t.ui === 'object');
     } },
   { id: 'runs', label: 'Runs', count: function (job) { return listLen(job.progress && job.progress.runs); } },
   { id: 'docs', label: 'Docs', count: function (job) { return listLen(job.mdFiles); } },
+  { id: 'files', label: 'Files', count: function (job) { return listLen(job.files); } },
+  // Always shown: a job only exists because its progress.json parsed, so Raw
+  // always has something, and it is the fallback when nothing else qualifies.
   { id: 'raw', label: 'Raw' },
 ];
+
+/** The tabs this job actually has content for, in DETAIL_TABS order. */
+function tabsFor(job) {
+  return DETAIL_TABS.filter(function (t) {
+    if (typeof t.has === 'function') return t.has(job);
+    if (typeof t.count === 'function') return t.count(job) > 0;
+    return true;
+  });
+}
 
 const detailTabsEl = document.getElementById('detailTabs');
 
@@ -349,6 +472,8 @@ export function openDetail(job) {
     renderTestTier(job.progress && job.progress.tests && job.progress.tests.ui, 'UI');
   document.getElementById('detailRuns').innerHTML = renderProgressRuns(job.progress);
   document.getElementById('detailIntake').innerHTML = renderIntake(job.progress);
+  document.getElementById('detailFiles').innerHTML = renderFiles(job);
+  showFilesError('');
 
   var raw;
   try { raw = JSON.stringify(job.progress, null, 2); } catch (e) { raw = String(job.progress); }
@@ -378,13 +503,15 @@ export function openDetail(job) {
     loadMdFile(job, chips[0].getAttribute('data-file'));
   }
 
-  detailTabsEl.innerHTML = DETAIL_TABS.map(function (t) {
+  var shown = tabsFor(job);
+  detailTabsEl.innerHTML = shown.map(function (t) {
     var n = typeof t.count === 'function' ? t.count(job) : null;
-    return '<button type="button" class="tab' + (n === 0 ? ' is-empty' : '') + '" id="tab-' + t.id + '" role="tab" ' +
+    return '<button type="button" class="tab" id="tab-' + t.id + '" role="tab" ' +
       'aria-selected="false" aria-controls="panel-' + t.id + '" tabindex="-1" data-tab="' + t.id + '">' +
       esc(t.label) + (n === null ? '' : ' <span class="badge badge-neutral">' + n + '</span>') + '</button>';
   }).join('');
-  setActiveTab('ac');
+  // AC first as always, unless this job has none - then whatever is leftmost.
+  setActiveTab(shown.some(function (t) { return t.id === 'ac'; }) ? 'ac' : shown[0].id);
   setResolveState(job);
   setVerifiedState(job);
 

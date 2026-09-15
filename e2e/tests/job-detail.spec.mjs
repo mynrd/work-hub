@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-import { goto, projectId, detail, jobRow } from '../support/app.mjs';
+import { goto, projectId, detail, jobRow, textDialog } from '../support/app.mjs';
 import { RESOLVED_JOB, AWAITING_VERIFY_JOB } from '../support/env.mjs';
 
 async function openJob(page, title) {
@@ -135,6 +135,87 @@ test('the Docs tab renders a markdown file through the server', async ({ page })
   await chips.nth(1).click();
   await expect(chips.nth(1)).toHaveClass(/is-active/);
   await expect(page.locator('#mdContent')).not.toContainText('Failed to load');
+});
+
+test('the Files tab lists the job folder without progress.json or the .md files', async ({ page }) => {
+  await openJob(page, 'A job touched today');
+  const d = detail(page);
+  await d.tab('files').click();
+
+  await expect(d.fileRows).toHaveCount(4);
+  await expect(d.panel('files')).not.toContainText('progress.json');
+  await expect(d.panel('files')).not.toContainText('PLAN.md');
+
+  // A real byte count, not a placeholder.
+  await expect(d.fileRow('notes.txt').locator('td[data-label="Size"]')).toContainText('B');
+
+  // Extension decides the button: .txt views in the dialog, .html opens a tab,
+  // and an extension the server will not serve gets neither.
+  await expect(d.fileRow('notes.txt').locator('button[data-kind="text"]')).toBeVisible();
+  await expect(d.fileRow('report.html').locator('button[data-kind="tab"]')).toBeVisible();
+  await expect(d.fileRow('script.ps1').locator('button')).toHaveCount(0);
+  await expect(d.fileRow('script.ps1')).toContainText('Not viewable');
+});
+
+test('View opens a .txt in the read-only viewer, and Escape closes it without closing the job', async ({ page }) => {
+  await openJob(page, 'A job touched today');
+  const d = detail(page);
+  const t = textDialog(page);
+  await d.tab('files').click();
+
+  await d.fileRow('notes.txt').locator('button[data-kind="text"]').click();
+  await expect(t.overlay).toHaveClass(/is-open/);
+  await expect(t.title).toHaveText('notes.txt');
+  await expect(t.body).toContainText('line two');
+  // Read-only is the markup: nothing in the dialog can be typed into.
+  await expect(t.modal.locator('input, textarea, [contenteditable]')).toHaveCount(0);
+
+  await t.fullscreen.click();
+  await expect(t.modal).toHaveClass(/is-fullscreen/);
+
+  // Escape closes the viewer only - the job dialog behind it stays open.
+  await page.keyboard.press('Escape');
+  await expect(t.overlay).not.toHaveClass(/is-open/);
+  await expect(d.overlay).toHaveClass(/is-open/);
+  await expect(d.tab('files')).toHaveClass(/is-active/);
+});
+
+test('Open sends an .html file to a new browser tab', async ({ page, context }) => {
+  await openJob(page, 'A job touched today');
+  const d = detail(page);
+  await d.tab('files').click();
+
+  const [popup] = await Promise.all([
+    context.waitForEvent('page'),
+    d.fileRow('report.html').locator('button[data-kind="tab"]').click(),
+  ]);
+  // The bytes come through the authed fetch layer and reach the tab as a blob:
+  // URL, so the tab never navigates to /api/ itself.
+  await expect(popup.locator('h1')).toHaveText('A report');
+  expect(popup.url()).toMatch(/^blob:/);
+  await expect(d.filesError).toBeHidden();
+  await popup.close();
+});
+
+test('a tab with nothing behind it is not rendered at all', async ({ page }) => {
+  const d = detail(page);
+
+  // The today job carries every section, so every tab is there.
+  await openJob(page, 'A job touched today');
+  await expect(page.locator('#detailTabs .tab')).toHaveCount(8);
+
+  // This one has acceptance criteria and nothing else: no intake, no tasks, no
+  // tests, no runs, no docs, no files. Only AC and Raw survive.
+  await page.keyboard.press('Escape');
+  await openJob(page, RESOLVED_JOB.title);
+  await expect(page.locator('#detailTabs .tab')).toHaveCount(2);
+  await expect(d.tab('ac')).toHaveClass(/is-active/);
+  for (const id of ['intake', 'tasks', 'tests', 'runs', 'docs', 'files']) {
+    await expect(d.tab(id)).toHaveCount(0);
+    await expect(d.panel(id)).toBeHidden();
+  }
+  // Raw is never hidden - a job only exists because its progress.json parsed.
+  await expect(d.tab('raw')).toHaveCount(1);
 });
 
 test('Maximise toggles fullscreen, and the state persists across a reload', async ({ page }) => {

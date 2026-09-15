@@ -57,6 +57,20 @@ export const detail = (page) => ({
   verifiedLabel: page.locator('#detailVerifiedLabel'),
   tab: (id) => page.locator(`#detailTabs .tab[data-tab="${id}"]`),
   panel: (id) => page.locator(`#panel-${id}`),
+  fileRows: page.locator('#detailFiles tbody tr'),
+  fileRow: (name) => page.locator('#detailFiles tbody tr').filter({ has: page.locator('.cell-mono', { hasText: name }) }),
+  filesError: page.locator('#filesError'),
+});
+
+/** The read-only text viewer the Files tab opens over the job dialog. */
+export const textDialog = (page) => ({
+  overlay: page.locator('#textOverlay'),
+  modal: page.locator('#textOverlay .modal'),
+  title: page.locator('#textTitle'),
+  body: page.locator('#textBody'),
+  copy: page.locator('#textCopyBtn'),
+  fullscreen: page.locator('#textFullscreenBtn'),
+  close: page.locator('#textCloseBtn'),
 });
 
 export const composer = (page) => ({
